@@ -1,27 +1,19 @@
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
-const fs = require('fs-extra');
+const fs = require('fs');
 const path = require('path');
-const cors = require('cors');
+const QRCode = require('qrcode');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
+const pino = require('pino');
 const multer = require('multer');
+const cors = require('cors');
+const mime = require('mime-types');
+const fsExtra = require('fs-extra');
 const cron = require('node-cron');
 
-// Import Baileys
-const { 
-    default: makeWASocket, 
-    DisconnectReason, 
-    useMultiFileAuthState,
-    fetchLatestBaileysVersion,
-    makeInMemoryStore,
-    isJidBroadcast,
-    isJidGroup,
-    jidNormalizedUser,
-    getAggregateVotesInPollMessage
-} = require('@whiskeysockets/baileys');
-
-const P = require('pino');
-
+// Initialize Express app
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -37,435 +29,503 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.static('public'));
 
-// Multer configuration for file uploads
+// Create necessary directories
+const createDirectories = () => {
+    const dirs = ['./auth_info_baileys', './data', './uploads'];
+    dirs.forEach(dir => {
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+    });
+};
+
+createDirectories();
+
+// File upload configuration
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        const uploadDir = path.join(__dirname, 'uploads');
-        fs.ensureDirSync(uploadDir);
-        cb(null, uploadDir);
+        cb(null, './uploads/');
     },
     filename: (req, file, cb) => {
-        cb(null, Date.now() + '-' + file.originalname);
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
     }
 });
 
 const upload = multer({ 
     storage: storage,
-    limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+    limits: {
+        fileSize: 50 * 1024 * 1024 // 50MB limit
+    }
 });
 
 // Global variables
-let sock;
+let sock = null;
 let qrCodeData = null;
 let isConnected = false;
-let authState;
-let store;
-let contacts = {};
-let groups = {};
-let messages = {};
-let templates = [];
-let contactGroups = [];
+let contacts = new Map();
+let groups = new Map();
+let messages = new Map();
 
-// Initialize store
-const initStore = () => {
-    store = makeInMemoryStore({ logger: P().child({ level: 'silent', stream: 'store' }) });
-    store.readFromFile('./baileys_store_multi.json');
-    
-    // Save store every 10 seconds
-    setInterval(() => {
-        store.writeToFile('./baileys_store_multi.json');
-    }, 10_000);
+// Data files
+const DATA_FILES = {
+    templates: './data/templates.json',
+    contactGroups: './data/contact-groups.json',
+    messages: './data/messages.json'
 };
 
-// Load saved data
-const loadSavedData = async () => {
+// Utility functions for data persistence
+const loadData = (file) => {
     try {
-        // Load templates
-        if (await fs.pathExists('./data/templates.json')) {
-            templates = await fs.readJSON('./data/templates.json');
-        }
-        
-        // Load contact groups
-        if (await fs.pathExists('./data/contact-groups.json')) {
-            contactGroups = await fs.readJSON('./data/contact-groups.json');
-        }
-        
-        // Load messages
-        if (await fs.pathExists('./data/messages.json')) {
-            messages = await fs.readJSON('./data/messages.json');
+        if (fs.existsSync(file)) {
+            return JSON.parse(fs.readFileSync(file, 'utf8'));
         }
     } catch (error) {
-        console.error('Error loading saved data:', error);
+        console.error(`Error loading ${file}:`, error);
+    }
+    return [];
+};
+
+const saveData = (file, data) => {
+    try {
+        fs.writeFileSync(file, JSON.stringify(data, null, 2));
+    } catch (error) {
+        console.error(`Error saving ${file}:`, error);
     }
 };
 
-// Save data
-const saveData = async () => {
-    try {
-        await fs.ensureDir('./data');
-        await fs.writeJSON('./data/templates.json', templates);
-        await fs.writeJSON('./data/contact-groups.json', contactGroups);
-        await fs.writeJSON('./data/messages.json', messages);
-    } catch (error) {
-        console.error('Error saving data:', error);
-    }
-};
-
-// Initialize WhatsApp connection
+// Logger
+const logger = pino({ level: 'info' });// WhatsApp Connection Functions
 const connectToWhatsApp = async () => {
     try {
-        const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
-        authState = state;
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
         
-        const { version, isLatest } = await fetchLatestBaileysVersion();
-        console.log(`Using WA v${version.join('.')}, isLatest: ${isLatest}`);
-
         sock = makeWASocket({
-            version,
-            logger: P({ level: 'warn' }),
-            printQRInTerminal: false,
-            auth: authState,
-            browser: ["WhatsApp Client", "Chrome", "1.0.0"],
-            generateHighQualityLinkPreview: true
+            auth: state,
+            printQRInTerminal: true,
+            logger: logger,
+            browser: ['WhatsApp Web Client', 'Chrome', '4.0.0'],
+            markOnlineOnConnect: true,
+            generateHighQualityLinkPreview: true,
+            defaultQueryTimeoutMs: 60 * 1000
         });
 
-        // Bind store to socket events
-        if (store) {
-            store.bind(sock.ev);
-        }
+        sock.ev.on('creds.update', saveCreds);
 
-        // Connection events
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
             if (qr) {
-                qrCodeData = qr;
-                io.emit('qr-code', qr);
-                console.log('QR Code generated');
+                try {
+                    qrCodeData = await QRCode.toDataURL(qr);
+                    io.emit('qr-code', qrCodeData);
+                    console.log('QR Code generated and sent to clients');
+                } catch (error) {
+                    console.error('Error generating QR code:', error);
+                }
             }
-            
+
             if (connection === 'close') {
-                const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
                 isConnected = false;
                 io.emit('connection-status', { connected: false });
-                console.log('Connection closed due to ', lastDisconnect?.error, ', reconnecting ', shouldReconnect);
+                
+                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                console.log('Connection closed due to:', lastDisconnect?.error, ', reconnecting:', shouldReconnect);
                 
                 if (shouldReconnect) {
-                    setTimeout(connectToWhatsApp, 3000);
+                    setTimeout(() => connectToWhatsApp(), 5000);
                 }
             } else if (connection === 'open') {
                 isConnected = true;
                 qrCodeData = null;
-                io.emit('connection-status', { connected: true });
-                io.emit('qr-code', null);
                 console.log('WhatsApp connected successfully');
+                io.emit('connection-status', { connected: true });
                 
                 // Load contacts and groups
                 await loadContactsAndGroups();
             }
         });
 
-        // Handle credentials update
-        sock.ev.on('creds.update', saveCreds);
-
-        // Handle incoming messages
-        sock.ev.on('messages.upsert', async (m) => {
-            const message = m.messages[0];
-            if (!message.key.fromMe && m.type === 'notify') {
-                console.log('Received message:', message);
-                
-                // Store message
-                const chatId = message.key.remoteJid;
-                if (!messages[chatId]) {
-                    messages[chatId] = [];
+        sock.ev.on('messages.upsert', async (messageUpdate) => {
+            const { messages } = messageUpdate;
+            
+            for (const message of messages) {
+                if (!message.key.fromMe) {
+                    const messageData = {
+                        id: message.key.id,
+                        from: message.key.remoteJid,
+                        message: message.message,
+                        timestamp: message.messageTimestamp,
+                        type: 'received'
+                    };
+                    
+                    // Store message
+                    storeMessage(messageData);
+                    
+                    // Emit to clients
+                    io.emit('new-message', messageData);
                 }
-                messages[chatId].push({
-                    id: message.key.id,
-                    from: message.key.fromMe ? 'me' : chatId,
-                    to: message.key.fromMe ? chatId : 'me',
-                    message: message.message,
-                    timestamp: message.messageTimestamp,
-                    type: 'received'
-                });
-                
-                // Emit to frontend
-                io.emit('new-message', {
-                    chatId,
-                    message: message.message,
-                    from: message.key.fromMe ? 'me' : chatId,
-                    timestamp: message.messageTimestamp
-                });
-                
-                await saveData();
             }
         });
 
-        // Handle message status updates
-        sock.ev.on('message-receipt.update', (updates) => {
-            updates.forEach(({ key, receipt }) => {
-                console.log('Message receipt update:', { key, receipt });
-                io.emit('message-status', { key, receipt });
-            });
-        });
-
-        // Handle presence updates
-        sock.ev.on('presence.update', ({ id, presences }) => {
-            io.emit('presence-update', { id, presences });
+        sock.ev.on('presence.update', (presenceUpdate) => {
+            io.emit('presence-update', presenceUpdate);
         });
 
     } catch (error) {
         console.error('Error connecting to WhatsApp:', error);
-        setTimeout(connectToWhatsApp, 5000);
+        setTimeout(() => connectToWhatsApp(), 10000);
     }
 };
 
-// Load contacts and groups
 const loadContactsAndGroups = async () => {
     try {
-        if (sock && isConnected) {
-            // Get contacts
-            const contactList = await sock.getContactList();
-            contacts = {};
-            contactList.forEach(contact => {
-                contacts[contact.id] = {
-                    id: contact.id,
-                    name: contact.name || contact.notify || contact.id.replace('@s.whatsapp.net', ''),
+        if (!sock) return;
+
+        // Load contacts
+        const contactsData = await sock.store?.contacts || {};
+        contacts.clear();
+        Object.entries(contactsData).forEach(([jid, contact]) => {
+            if (jid.includes('@s.whatsapp.net')) {
+                contacts.set(jid, {
+                    jid,
+                    name: contact.name || contact.notify || jid.split('@')[0],
                     notify: contact.notify,
-                    status: contact.status
-                };
+                    verifiedName: contact.verifiedName
+                });
+            }
+        });
+
+        // Load groups
+        const groupsData = await sock.groupFetchAllParticipating();
+        groups.clear();
+        Object.entries(groupsData).forEach(([jid, group]) => {
+            groups.set(jid, {
+                jid,
+                subject: group.subject,
+                desc: group.desc,
+                participants: group.participants,
+                creation: group.creation,
+                owner: group.owner
             });
-            
-            // Get groups
-            const groupList = await sock.groupFetchAllParticipating();
-            groups = {};
-            Object.keys(groupList).forEach(groupId => {
-                const group = groupList[groupId];
-                groups[groupId] = {
-                    id: groupId,
-                    name: group.subject,
-                    participants: group.participants,
-                    description: group.desc,
-                    creation: group.creation,
-                    owner: group.owner
-                };
-            });
-            
-            io.emit('contacts-updated', contacts);
-            io.emit('groups-updated', groups);
-            console.log(`Loaded ${Object.keys(contacts).length} contacts and ${Object.keys(groups).length} groups`);
-        }
+        });
+
+        console.log(`Loaded ${contacts.size} contacts and ${groups.size} groups`);
+        
+        // Emit to clients
+        io.emit('contacts-loaded', Array.from(contacts.values()));
+        io.emit('groups-loaded', Array.from(groups.values()));
+        
     } catch (error) {
         console.error('Error loading contacts and groups:', error);
     }
 };
 
-// API Routes
+const storeMessage = (messageData) => {
+    try {
+        const messages = loadData(DATA_FILES.messages);
+        messages.push(messageData);
+        
+        // Keep only last 1000 messages per chat
+        const chatMessages = messages.filter(m => m.from === messageData.from);
+        if (chatMessages.length > 1000) {
+            const toRemove = chatMessages.slice(0, chatMessages.length - 1000);
+            toRemove.forEach(msg => {
+                const index = messages.findIndex(m => m.id === msg.id);
+                if (index > -1) messages.splice(index, 1);
+            });
+        }
+        
+        saveData(DATA_FILES.messages, messages);
+    } catch (error) {
+        console.error('Error storing message:', error);
+    }
+};// API Routes
 
-// Get connection status
+// Status and QR code endpoints
 app.get('/api/status', (req, res) => {
-    res.json({ 
-        connected: isConnected, 
+    res.json({
+        connected: isConnected,
         qrCode: qrCodeData,
-        contacts: Object.keys(contacts).length,
-        groups: Object.keys(groups).length
+        contacts: contacts.size,
+        groups: groups.size
     });
 });
 
-// Get QR code
 app.get('/api/qr', (req, res) => {
-    res.json({ qrCode: qrCodeData });
+    if (qrCodeData) {
+        res.json({ qrCode: qrCodeData });
+    } else {
+        res.status(404).json({ error: 'No QR code available' });
+    }
 });
 
-// Get contacts
+// Contacts and groups endpoints
 app.get('/api/contacts', (req, res) => {
-    res.json(contacts);
+    res.json(Array.from(contacts.values()));
 });
 
-// Get groups
 app.get('/api/groups', (req, res) => {
-    res.json(groups);
+    res.json(Array.from(groups.values()));
 });
 
-// Get messages for a chat
-app.get('/api/messages/:chatId', (req, res) => {
-    const chatId = req.params.chatId;
-    const chatMessages = messages[chatId] || [];
-    res.json(chatMessages);
-});
-
-// Send message
+// Messaging endpoints
 app.post('/api/send-message', async (req, res) => {
     try {
-        const { to, message, type = 'text', mediaUrl, fileName, caption } = req.body;
-        
-        if (!isConnected) {
+        if (!sock || !isConnected) {
             return res.status(400).json({ error: 'WhatsApp not connected' });
+        }
+
+        const { to, message, type = 'text' } = req.body;
+        
+        if (!to || !message) {
+            return res.status(400).json({ error: 'Missing required fields' });
         }
 
         let result;
         
-        switch (type) {
-            case 'text':
-                result = await sock.sendMessage(to, { text: message });
-                break;
-                
-            case 'image':
-                if (mediaUrl) {
-                    result = await sock.sendMessage(to, { 
-                        image: { url: mediaUrl }, 
-                        caption: caption || '' 
-                    });
-                }
-                break;
-                
-            case 'video':
-                if (mediaUrl) {
-                    result = await sock.sendMessage(to, { 
-                        video: { url: mediaUrl }, 
-                        caption: caption || '' 
-                    });
-                }
-                break;
-                
-            case 'document':
-                if (mediaUrl) {
-                    result = await sock.sendMessage(to, { 
-                        document: { url: mediaUrl }, 
-                        fileName: fileName || 'document',
-                        caption: caption || '' 
-                    });
-                }
-                break;
-                
-            case 'audio':
-                if (mediaUrl) {
-                    result = await sock.sendMessage(to, { 
-                        audio: { url: mediaUrl }, 
-                        mimetype: 'audio/mp4'
-                    });
-                }
-                break;
+        if (type === 'text') {
+            result = await sock.sendMessage(to, { text: message });
+        } else {
+            return res.status(400).json({ error: 'Unsupported message type' });
         }
-        
+
         // Store sent message
-        if (!messages[to]) {
-            messages[to] = [];
-        }
-        messages[to].push({
+        const messageData = {
             id: result.key.id,
-            from: 'me',
             to: to,
-            message: { text: message } || { caption: caption },
+            message: message,
             timestamp: Date.now(),
-            type: 'sent'
-        });
+            type: 'sent',
+            status: 'sent'
+        };
         
-        await saveData();
-        
+        storeMessage(messageData);
+        io.emit('message-sent', messageData);
+
         res.json({ success: true, messageId: result.key.id });
     } catch (error) {
         console.error('Error sending message:', error);
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: 'Failed to send message' });
     }
 });
 
-// Send bulk messages
 app.post('/api/send-bulk', async (req, res) => {
     try {
-        const { recipients, message, type = 'text', delay = 1000 } = req.body;
-        
-        if (!isConnected) {
+        if (!sock || !isConnected) {
             return res.status(400).json({ error: 'WhatsApp not connected' });
         }
+
+        const { recipients, message, delay = 1000 } = req.body;
         
+        if (!recipients || !Array.isArray(recipients) || !message) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
         const results = [];
         
-        for (const recipient of recipients) {
+        for (let i = 0; i < recipients.length; i++) {
             try {
-                await new Promise(resolve => setTimeout(resolve, delay));
-                
+                const recipient = recipients[i];
                 const result = await sock.sendMessage(recipient, { text: message });
-                results.push({ recipient, success: true, messageId: result.key.id });
                 
-                // Store sent message
-                if (!messages[recipient]) {
-                    messages[recipient] = [];
-                }
-                messages[recipient].push({
-                    id: result.key.id,
-                    from: 'me',
-                    to: recipient,
-                    message: { text: message },
-                    timestamp: Date.now(),
-                    type: 'sent'
+                results.push({
+                    recipient,
+                    success: true,
+                    messageId: result.key.id
                 });
+
+                // Store sent message
+                const messageData = {
+                    id: result.key.id,
+                    to: recipient,
+                    message: message,
+                    timestamp: Date.now(),
+                    type: 'sent',
+                    status: 'sent'
+                };
+                
+                storeMessage(messageData);
+                io.emit('message-sent', messageData);
+                
+                // Delay between messages
+                if (i < recipients.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
                 
             } catch (error) {
-                results.push({ recipient, success: false, error: error.message });
+                console.error(`Error sending to ${recipients[i]}:`, error);
+                results.push({
+                    recipient: recipients[i],
+                    success: false,
+                    error: error.message
+                });
             }
         }
-        
-        await saveData();
+
         res.json({ results });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('Error sending bulk messages:', error);
+        res.status(500).json({ error: 'Failed to send bulk messages' });
     }
 });
 
-// Upload file
-app.post('/api/upload', upload.single('file'), (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
-    }
-    
-    const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
-    res.json({ 
-        success: true, 
-        fileUrl: fileUrl,
-        fileName: req.file.originalname,
-        fileSize: req.file.size,
-        mimeType: req.file.mimetype
-    });
-});
-
-// Get templates
-app.get('/api/templates', (req, res) => {
-    res.json(templates);
-});
-
-// Create template
-app.post('/api/templates', async (req, res) => {
+app.get('/api/messages/:chatId', (req, res) => {
     try {
-        const { name, content, variables = [] } = req.body;
+        const { chatId } = req.params;
+        const allMessages = loadData(DATA_FILES.messages);
+        const chatMessages = allMessages.filter(m => m.from === chatId || m.to === chatId);
         
-        const template = {
+        // Sort by timestamp
+        chatMessages.sort((a, b) => a.timestamp - b.timestamp);
+        
+        res.json(chatMessages);
+    } catch (error) {
+        console.error('Error loading messages:', error);
+        res.status(500).json({ error: 'Failed to load messages' });
+    }
+});// File upload endpoints
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        const fileInfo = {
+            filename: req.file.filename,
+            originalName: req.file.originalname,
+            mimetype: req.file.mimetype,
+            size: req.file.size,
+            path: req.file.path
+        };
+
+        res.json(fileInfo);
+    } catch (error) {
+        console.error('Error uploading file:', error);
+        res.status(500).json({ error: 'Failed to upload file' });
+    }
+});
+
+app.post('/api/send-media', async (req, res) => {
+    try {
+        if (!sock || !isConnected) {
+            return res.status(400).json({ error: 'WhatsApp not connected' });
+        }
+
+        const { to, filename, caption } = req.body;
+        
+        if (!to || !filename) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        const filePath = path.join('./uploads', filename);
+        
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        const mimeType = mime.lookup(filePath) || 'application/octet-stream';
+        const fileBuffer = fs.readFileSync(filePath);
+
+        let result;
+        
+        if (mimeType.startsWith('image/')) {
+            result = await sock.sendMessage(to, {
+                image: fileBuffer,
+                caption: caption || '',
+                mimetype: mimeType
+            });
+        } else if (mimeType.startsWith('video/')) {
+            result = await sock.sendMessage(to, {
+                video: fileBuffer,
+                caption: caption || '',
+                mimetype: mimeType
+            });
+        } else if (mimeType.startsWith('audio/')) {
+            result = await sock.sendMessage(to, {
+                audio: fileBuffer,
+                mimetype: mimeType
+            });
+        } else {
+            result = await sock.sendMessage(to, {
+                document: fileBuffer,
+                fileName: path.basename(filePath),
+                mimetype: mimeType,
+                caption: caption || ''
+            });
+        }
+
+        // Store sent message
+        const messageData = {
+            id: result.key.id,
+            to: to,
+            message: caption || `File: ${path.basename(filePath)}`,
+            timestamp: Date.now(),
+            type: 'sent',
+            mediaType: mimeType,
+            filename: filename
+        };
+        
+        storeMessage(messageData);
+        io.emit('message-sent', messageData);
+
+        res.json({ success: true, messageId: result.key.id });
+    } catch (error) {
+        console.error('Error sending media:', error);
+        res.status(500).json({ error: 'Failed to send media' });
+    }
+});
+
+// Template management endpoints
+app.get('/api/templates', (req, res) => {
+    try {
+        const templates = loadData(DATA_FILES.templates);
+        res.json(templates);
+    } catch (error) {
+        console.error('Error loading templates:', error);
+        res.status(500).json({ error: 'Failed to load templates' });
+    }
+});
+
+app.post('/api/templates', (req, res) => {
+    try {
+        const { name, content, variables } = req.body;
+        
+        if (!name || !content) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        const templates = loadData(DATA_FILES.templates);
+        const newTemplate = {
             id: Date.now().toString(),
             name,
             content,
-            variables,
+            variables: variables || [],
             createdAt: new Date().toISOString()
         };
-        
-        templates.push(template);
-        await saveData();
-        
-        res.json({ success: true, template });
+
+        templates.push(newTemplate);
+        saveData(DATA_FILES.templates, templates);
+
+        res.json(newTemplate);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('Error creating template:', error);
+        res.status(500).json({ error: 'Failed to create template' });
     }
 });
 
-// Update template
-app.put('/api/templates/:id', async (req, res) => {
+app.put('/api/templates/:id', (req, res) => {
     try {
-        const templateId = req.params.id;
+        const { id } = req.params;
         const { name, content, variables } = req.body;
         
-        const templateIndex = templates.findIndex(t => t.id === templateId);
+        const templates = loadData(DATA_FILES.templates);
+        const templateIndex = templates.findIndex(t => t.id === id);
+        
         if (templateIndex === -1) {
             return res.status(404).json({ error: 'Template not found' });
         }
-        
+
         templates[templateIndex] = {
             ...templates[templateIndex],
             name,
@@ -473,231 +533,88 @@ app.put('/api/templates/:id', async (req, res) => {
             variables,
             updatedAt: new Date().toISOString()
         };
-        
-        await saveData();
-        res.json({ success: true, template: templates[templateIndex] });
+
+        saveData(DATA_FILES.templates, templates);
+        res.json(templates[templateIndex]);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('Error updating template:', error);
+        res.status(500).json({ error: 'Failed to update template' });
     }
 });
 
-// Delete template
-app.delete('/api/templates/:id', async (req, res) => {
+app.delete('/api/templates/:id', (req, res) => {
     try {
-        const templateId = req.params.id;
-        const templateIndex = templates.findIndex(t => t.id === templateId);
+        const { id } = req.params;
+        const templates = loadData(DATA_FILES.templates);
+        const filteredTemplates = templates.filter(t => t.id !== id);
         
-        if (templateIndex === -1) {
+        if (filteredTemplates.length === templates.length) {
             return res.status(404).json({ error: 'Template not found' });
         }
-        
-        templates.splice(templateIndex, 1);
-        await saveData();
-        
+
+        saveData(DATA_FILES.templates, filteredTemplates);
         res.json({ success: true });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('Error deleting template:', error);
+        res.status(500).json({ error: 'Failed to delete template' });
     }
-});
-
-// Get contact groups
-app.get('/api/contact-groups', (req, res) => {
-    res.json(contactGroups);
-});
-
-// Create contact group
-app.post('/api/contact-groups', async (req, res) => {
-    try {
-        const { name, contacts = [] } = req.body;
+});// Clean up old files periodically
+cron.schedule('0 2 * * *', () => {
+    console.log('Running cleanup task...');
+    
+    // Clean up old uploaded files (older than 7 days)
+    const uploadsDir = './uploads';
+    if (fs.existsSync(uploadsDir)) {
+        const files = fs.readdirSync(uploadsDir);
+        const now = Date.now();
+        const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
         
-        const contactGroup = {
-            id: Date.now().toString(),
-            name,
-            contacts,
-            createdAt: new Date().toISOString()
-        };
-        
-        contactGroups.push(contactGroup);
-        await saveData();
-        
-        res.json({ success: true, contactGroup });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Update contact group
-app.put('/api/contact-groups/:id', async (req, res) => {
-    try {
-        const groupId = req.params.id;
-        const { name, contacts } = req.body;
-        
-        const groupIndex = contactGroups.findIndex(g => g.id === groupId);
-        if (groupIndex === -1) {
-            return res.status(404).json({ error: 'Contact group not found' });
-        }
-        
-        contactGroups[groupIndex] = {
-            ...contactGroups[groupIndex],
-            name,
-            contacts,
-            updatedAt: new Date().toISOString()
-        };
-        
-        await saveData();
-        res.json({ success: true, contactGroup: contactGroups[groupIndex] });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Delete contact group
-app.delete('/api/contact-groups/:id', async (req, res) => {
-    try {
-        const groupId = req.params.id;
-        const groupIndex = contactGroups.findIndex(g => g.id === groupId);
-        
-        if (groupIndex === -1) {
-            return res.status(404).json({ error: 'Contact group not found' });
-        }
-        
-        contactGroups.splice(groupIndex, 1);
-        await saveData();
-        
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Send message using template
-app.post('/api/send-template', async (req, res) => {
-    try {
-        const { templateId, recipients, variables = {} } = req.body;
-        
-        if (!isConnected) {
-            return res.status(400).json({ error: 'WhatsApp not connected' });
-        }
-        
-        const template = templates.find(t => t.id === templateId);
-        if (!template) {
-            return res.status(404).json({ error: 'Template not found' });
-        }
-        
-        let message = template.content;
-        
-        // Replace variables in template
-        Object.keys(variables).forEach(key => {
-            const regex = new RegExp(`{{${key}}}`, 'g');
-            message = message.replace(regex, variables[key]);
-        });
-        
-        const results = [];
-        
-        for (const recipient of recipients) {
-            try {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                
-                const result = await sock.sendMessage(recipient, { text: message });
-                results.push({ recipient, success: true, messageId: result.key.id });
-                
-                // Store sent message
-                if (!messages[recipient]) {
-                    messages[recipient] = [];
-                }
-                messages[recipient].push({
-                    id: result.key.id,
-                    from: 'me',
-                    to: recipient,
-                    message: { text: message },
-                    timestamp: Date.now(),
-                    type: 'sent'
-                });
-                
-            } catch (error) {
-                results.push({ recipient, success: false, error: error.message });
+        files.forEach(file => {
+            const filePath = path.join(uploadsDir, file);
+            const stats = fs.statSync(filePath);
+            
+            if (stats.mtime.getTime() < sevenDaysAgo) {
+                fs.unlinkSync(filePath);
+                console.log(`Deleted old file: ${file}`);
             }
-        }
-        
-        await saveData();
-        res.json({ results });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Socket.IO events
-io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
-    
-    // Send current status
-    socket.emit('connection-status', { connected: isConnected });
-    socket.emit('qr-code', qrCodeData);
-    socket.emit('contacts-updated', contacts);
-    socket.emit('groups-updated', groups);
-    
-    socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
-    });
-    
-    // Handle typing indicator
-    socket.on('typing', async (data) => {
-        if (isConnected && data.chatId) {
-            await sock.sendPresenceUpdate('composing', data.chatId);
-        }
-    });
-    
-    socket.on('stop-typing', async (data) => {
-        if (isConnected && data.chatId) {
-            await sock.sendPresenceUpdate('paused', data.chatId);
-        }
-    });
-});
-
-// Static file serving for uploads
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// Initialize application
-const init = async () => {
-    try {
-        // Ensure directories exist
-        await fs.ensureDir('./data');
-        await fs.ensureDir('./uploads');
-        await fs.ensureDir('./auth_info_baileys');
-        
-        // Initialize store
-        initStore();
-        
-        // Load saved data
-        await loadSavedData();
-        
-        // Connect to WhatsApp
-        await connectToWhatsApp();
-        
-        // Schedule periodic data saves
-        cron.schedule('*/5 * * * *', async () => {
-            await saveData();
-            console.log('Data saved automatically');
         });
-        
-    } catch (error) {
-        console.error('Error initializing application:', error);
     }
-};
+    
+    // Clean up old messages (keep only last 30 days)
+    try {
+        const messages = loadData(DATA_FILES.messages);
+        const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
+        const filteredMessages = messages.filter(msg => msg.timestamp > thirtyDaysAgo);
+        
+        if (filteredMessages.length < messages.length) {
+            saveData(DATA_FILES.messages, filteredMessages);
+            console.log(`Cleaned up ${messages.length - filteredMessages.length} old messages`);
+        }
+    } catch (error) {
+        console.error('Error cleaning up messages:', error);
+    }
+});
 
 // Start server
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`WhatsApp Client server running on port ${PORT}`);
-    init();
+
+server.listen(PORT, async () => {
+    console.log(`WhatsApp Web Client server running on port ${PORT}`);
+    console.log(`Access the application at: http://localhost:${PORT}`);
+    
+    // Initialize WhatsApp connection
+    console.log('Initializing WhatsApp connection...');
+    await connectToWhatsApp();
 });
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-    console.log('Shutting down gracefully...');
-    await saveData();
-    if (sock) {
-        await sock.logout();
-    }
-    process.exit(0);
+// Error handling
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
+
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    cleanup();
+});
+
+module.exports = { app, server, io };

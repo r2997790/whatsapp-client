@@ -17,15 +17,35 @@ const { makeWASocket, DisconnectReason, useMultiFileAuthState, Browsers } = requ
 
 const app = express();
 const server = http.createServer(app);
+
+// Enhanced CORS configuration
+const corsOptions = {
+    origin: [
+        'https://whatsapp-client-production.up.railway.app',
+        'http://localhost:3000',
+        'http://localhost:3001'
+    ],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    credentials: true
+};
+
+app.use(cors(corsOptions));
+app.use(express.json());
+
+// Enhanced Socket.io with CORS
 const io = new Server(server, {
     cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
-    }
+        origin: [
+            'https://whatsapp-client-production.up.railway.app',
+            'http://localhost:3000',
+            'http://localhost:3001'
+        ],
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    transports: ['websocket', 'polling']
 });
-
-app.use(cors());
-app.use(express.json());
 
 // Global state
 let currentQR = null;

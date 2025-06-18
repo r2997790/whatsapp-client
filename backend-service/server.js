@@ -6,6 +6,10 @@ const { makeWASocket, DisconnectReason, useMultiFileAuthState, Browsers } = requ
 const QRCode = require('qrcode');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+
+// Ensure crypto is available globally for Baileys
+global.crypto = crypto;
 
 const app = express();
 const server = http.createServer(app);
@@ -33,6 +37,7 @@ if (!fs.existsSync(authDir)) {
 
 async function startWhatsApp() {
     try {
+        console.log('Starting WhatsApp connection...');
         const { state, saveCreds } = await useMultiFileAuthState(authDir);
         
         const sock = makeWASocket({
@@ -40,6 +45,10 @@ async function startWhatsApp() {
             printQRInTerminal: true,
             browser: Browsers.macOS('Desktop'),
             syncFullHistory: false,
+            defaultQueryTimeoutMs: 60000,
+            connectTimeoutMs: 60000,
+            keepAliveIntervalMs: 10000,
+            logger: console,
         });
 
         socket_global = sock;
@@ -47,16 +56,23 @@ async function startWhatsApp() {
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
-            console.log('Connection update:', { connection, qr: !!qr });
+            console.log('Connection update:', { 
+                connection, 
+                qr: !!qr, 
+                lastDisconnect: lastDisconnect?.error?.message 
+            });
             
             if (qr) {
                 try {
+                    console.log('Generating QR code...');
                     currentQR = await QRCode.toDataURL(qr);
                     connectionStatus = 'qr_ready';
                     io.emit('qr_updated', { qr: currentQR, status: connectionStatus });
                     console.log('QR Code generated and sent to clients');
                 } catch (err) {
                     console.error('Error generating QR:', err);
+                    connectionStatus = 'error';
+                    io.emit('status_update', { status: connectionStatus, error: err.message });
                 }
             }
 
@@ -202,8 +218,24 @@ app.get('/api/qr', (req, res) => {
     if (currentQR) {
         res.json({ qr: currentQR, status: connectionStatus });
     } else {
-        res.status(404).json({ error: 'No QR code available' });
+        res.status(404).json({ 
+            error: 'No QR code available', 
+            status: connectionStatus,
+            timestamp: Date.now()
+        });
     }
+});
+
+app.get('/api/force-reconnect', (req, res) => {
+    console.log('Force reconnect requested via API');
+    if (socket_global) {
+        socket_global.end();
+    }
+    connectionStatus = 'reconnecting';
+    setTimeout(() => {
+        startWhatsApp();
+    }, 1000);
+    res.json({ message: 'Reconnection initiated', status: connectionStatus });
 });
 
 app.post('/api/send-message', async (req, res) => {
@@ -246,6 +278,13 @@ process.on('SIGINT', () => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`WhatsApp service running on port ${PORT}`);
-    // Start WhatsApp connection
-    startWhatsApp();
+    console.log('Node.js version:', process.version);
+    console.log('Crypto available:', !!crypto);
+    console.log('Auth directory:', authDir);
+    
+    // Start WhatsApp connection after server is ready
+    setTimeout(() => {
+        console.log('Initializing WhatsApp connection...');
+        startWhatsApp();
+    }, 2000);
 });

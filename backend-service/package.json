@@ -8,11 +8,12 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.6.0",
+    "@whiskeysockets/baileys": "^6.7.8",
     "express": "^4.18.2",
     "socket.io": "^4.7.4",
     "cors": "^2.8.5",
-    "qrcode": "^1.5.3"
+    "qrcode": "^1.5.3",
+    "pino": "^8.17.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

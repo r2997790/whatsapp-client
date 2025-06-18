@@ -391,6 +391,15 @@
                         <li>Scan the QR code with your phone</li>
                         <li>Start sending messages!</li>
                     </ol>
+                    
+                    <div style="margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 8px; font-size: 0.8rem;">
+                        <strong>Debug Info:</strong><br>
+                        Backend URL: <span id="debugBackendUrl"></span><br>
+                        Socket Status: <span id="debugSocketStatus">Connecting...</span><br>
+                        Last Update: <span id="debugLastUpdate">-</span><br>
+                        <button onclick="testConnection()" style="margin-top: 8px; padding: 4px 8px; font-size: 0.7rem; background: #007bff;">Test Connection</button>
+                        <button onclick="testQRAPI()" style="margin-top: 8px; padding: 4px 8px; font-size: 0.7rem; background: #28a745;">Test QR API</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -451,14 +460,21 @@
         <div id="logContent"></div>
     </div>
 
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
     <script>
         // Get backend URL from environment or use current domain
         const BACKEND_URL = window.location.hostname.includes('localhost') 
             ? 'http://localhost:3001' 
             : 'https://whatsapp-service-production-66d3.up.railway.app';
         
-        const socket = io(BACKEND_URL);
+        console.log('🔗 Connecting to backend:', BACKEND_URL);
+        
+        // Initialize socket with better configuration
+        const socket = io(BACKEND_URL, {
+            transports: ['websocket', 'polling'],
+            timeout: 10000,
+            forceNew: true
+        });
         let isConnected = false;
 
         // DOM Elements
@@ -509,12 +525,31 @@
         });
 
         socket.on('connect', () => {
-            console.log('Connected to backend');
+            console.log('✅ Connected to backend:', BACKEND_URL);
+            if (document.getElementById('debugSocketStatus')) {
+                document.getElementById('debugSocketStatus').textContent = 'Connected';
+                document.getElementById('debugLastUpdate').textContent = new Date().toLocaleTimeString();
+            }
+            showNotification('Connected to backend', 'success');
         });
 
-        socket.on('disconnect', () => {
-            console.log('Disconnected from backend');
+        socket.on('disconnect', (reason) => {
+            console.log('❌ Disconnected from backend:', reason);
             updateStatus('disconnected');
+            if (document.getElementById('debugSocketStatus')) {
+                document.getElementById('debugSocketStatus').textContent = 'Disconnected (' + reason + ')';
+                document.getElementById('debugLastUpdate').textContent = new Date().toLocaleTimeString();
+            }
+            showNotification('Disconnected: ' + reason, 'error');
+        });
+
+        socket.on('connect_error', (error) => {
+            console.log('❌ Socket connection error:', error);
+            if (document.getElementById('debugSocketStatus')) {
+                document.getElementById('debugSocketStatus').textContent = 'Connection Error';
+                document.getElementById('debugLastUpdate').textContent = new Date().toLocaleTimeString();
+            }
+            showNotification('Connection error: ' + error.message, 'error');
         });
 
         function updateStatus(status) {
@@ -570,13 +605,44 @@
         }
 
         function connectWhatsApp() {
-            if (isConnected) {
+            console.log('🔌 Connect button clicked, current status:', connectionStatus);
+            console.log('📡 Socket connected:', socket.connected);
+            console.log('🌐 Backend URL:', BACKEND_URL);
+            
+            if (socket.connected) {
+                console.log('📤 Sending reconnect_whatsapp via socket...');
                 socket.emit('reconnect_whatsapp');
             } else {
-                // For initial connection, the backend automatically starts
-                socket.emit('reconnect_whatsapp');
+                console.log('⚠️ Socket not connected, trying API fallback...');
+                // Try API fallback
+                fetch(`${BACKEND_URL}/api/force-reconnect`, { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('✅ API reconnect response:', data);
+                        showNotification('Reconnection initiated via API', 'info');
+                    })
+                    .catch(err => {
+                        console.error('❌ API reconnect failed:', err);
+                        showNotification('Failed to connect: ' + err.message, 'error');
+                    });
             }
+            
             updateStatus('reconnecting');
+            
+            // Also try to get QR directly
+            setTimeout(() => {
+                fetch(`${BACKEND_URL}/api/qr`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.qr) {
+                            console.log('✅ Got QR via API');
+                            showQRCode(data.qr);
+                        } else {
+                            console.log('⚠️ No QR available via API:', data.message);
+                        }
+                    })
+                    .catch(err => console.log('QR API failed:', err));
+            }, 2000);
         }
 
         function switchTab(tabName) {
@@ -685,11 +751,50 @@
         document.addEventListener('DOMContentLoaded', function() {
             updateStatus('disconnected');
             
+            // Update debug info
+            document.getElementById('debugBackendUrl').textContent = BACKEND_URL;
+            document.getElementById('debugSocketStatus').textContent = 'Initializing...';
+            document.getElementById('debugLastUpdate').textContent = new Date().toLocaleTimeString();
+            
             // Auto-connect on page load
             setTimeout(() => {
                 connectWhatsApp();
             }, 1000);
         });
+
+        function testConnection() {
+            console.log('🧪 Testing connection to:', BACKEND_URL);
+            fetch(`${BACKEND_URL}/health`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('✅ Backend health:', data);
+                    showNotification(`Backend OK: ${data.whatsapp_status}`, 'success');
+                })
+                .catch(err => {
+                    console.error('❌ Backend health failed:', err);
+                    showNotification('Backend health failed: ' + err.message, 'error');
+                });
+        }
+
+        function testQRAPI() {
+            console.log('🧪 Testing QR API...');
+            fetch(`${BACKEND_URL}/api/qr`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.qr) {
+                        console.log('✅ QR code received via API');
+                        showQRCode(data.qr);
+                        showNotification('QR code loaded via API', 'success');
+                    } else {
+                        console.log('⚠️ No QR available:', data);
+                        showNotification(data.error || data.message || 'No QR available', 'warning');
+                    }
+                })
+                .catch(err => {
+                    console.error('❌ QR API failed:', err);
+                    showNotification('QR API failed: ' + err.message, 'error');
+                });
+        }
 
         // Add helper text for phone number format
         const numberInputs = document.querySelectorAll('#individualNumber, #bulkNumbers');

@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ['nodejs-18_x', 'npm-9_x']
+
+[phases.install]
+cmds = ['npm install']
+
+[phases.build]
+cmds = ['mkdir -p auth_info_baileys data uploads']
+
+[start]
+cmd = 'npm start'

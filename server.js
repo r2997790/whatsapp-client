@@ -8,13 +8,14 @@ const path = require('path');
 const { tmpdir } = require('os');
 
 // Import Baileys with proper error handling
-let makeWASocket, DisconnectReason, useMultiFileAuthState, delay;
+let makeWASocket, DisconnectReason, useMultiFileAuthState, delay, fetchLatestBaileysVersion;
 try {
   const baileys = require('@whiskeysockets/baileys');
   makeWASocket = baileys.default;
   DisconnectReason = baileys.DisconnectReason;
   useMultiFileAuthState = baileys.useMultiFileAuthState;
   delay = baileys.delay;
+  fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
   console.log('✅ Baileys imported successfully, version:', baileys.version || 'unknown');
 } catch (error) {
   console.error('❌ Error importing Baileys:', error);
@@ -93,33 +94,51 @@ async function connectToWhatsApp() {
     try {
       const files = fs.readdirSync(authDir);
       for (const file of files) {
-        if (file.startsWith('creds.json') || file.startsWith('app-state-sync-key') || file.startsWith('app-state-sync-version')) {
-          fs.unlinkSync(path.join(authDir, file));
-        }
+        const filePath = path.join(authDir, file);
+        fs.unlinkSync(filePath);
       }
-      console.log('🧹 Cleared previous auth state for fresh QR generation');
+      console.log('🧹 Cleared all previous auth state for fresh QR generation');
     } catch (error) {
       console.log('📂 No previous auth state to clear:', error.message);
     }
     
+    // Get the latest Baileys version for better compatibility
+    let version;
+    try {
+      const versionInfo = await fetchLatestBaileysVersion();
+      version = versionInfo.version;
+      console.log('📱 Using Baileys version:', version);
+    } catch (error) {
+      console.log('⚠️ Could not fetch latest version, using default');
+    }
+    
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
-    console.log('📱 Auth state loaded');
+    console.log('📱 Auth state initialized');
     
     sock = makeWASocket({
+      version: version,
       auth: state,
-      printQRInTerminal: true, // Also print QR in terminal for debugging
+      printQRInTerminal: true,
       logger: logger,
-      browser: ['WhatsApp Web Client', 'Chrome', '130.0.0'],
+      browser: ['WhatsApp Client', 'Chrome', '130.0.0'],
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
-      keepAliveIntervalMs: 10000,
+      keepAliveIntervalMs: 30000,
       generateHighQualityLinkPreview: false,
       syncFullHistory: false,
-      markOnlineOnConnect: true,
-      mobile: false, // Ensure we're using web client mode
+      markOnlineOnConnect: false,
+      emitOwnEvents: false,
+      fireInitQueries: true,
+      shouldSyncHistoryMessage: () => false,
+      shouldIgnoreJid: () => false,
+      linkPreviewImageThumbnailWidth: 192,
+      transactionOpts: {
+        maxCommitRetries: 5,
+        delayBetweenTriesMs: 3000
+      },
       getMessage: async key => {
         return {
-          conversation: 'hello'
+          conversation: 'Hello'
         }
       }
     });
@@ -136,7 +155,7 @@ async function connectToWhatsApp() {
       if (qr) {
         try {
           console.log('📱 Generating QR Code...');
-          console.log('QR String:', qr.substring(0, 50) + '...');
+          console.log('QR String length:', qr.length);
           
           qrCodeData = await QRCode.toDataURL(qr, { 
             scale: 8, 
@@ -150,7 +169,7 @@ async function connectToWhatsApp() {
           });
           
           connectionStatus = 'qr-ready';
-          console.log('✅ QR Code generated successfully, length:', qrCodeData.length);
+          console.log('✅ QR Code generated successfully, data length:', qrCodeData.length);
           
           // Emit to all connected clients
           io.emit('qr-code', qrCodeData);
@@ -177,13 +196,34 @@ async function connectToWhatsApp() {
         io.emit('connection-status', connectionStatus);
         io.emit('qr-code', null);
         
-        if (shouldReconnect && statusCode !== DisconnectReason.badSession) {
+        // Handle different disconnect reasons
+        if (statusCode === DisconnectReason.badSession) {
+          console.log('🗑️ Bad session, clearing auth and restarting...');
+          try {
+            const files = fs.readdirSync(authDir);
+            for (const file of files) {
+              fs.unlinkSync(path.join(authDir, file));
+            }
+          } catch (e) {}
+          setTimeout(() => connectToWhatsApp(), 2000);
+        } else if (statusCode === DisconnectReason.connectionClosed) {
+          console.log('🔄 Connection closed, reconnecting...');
+          setTimeout(() => connectToWhatsApp(), 3000);
+        } else if (statusCode === DisconnectReason.connectionLost) {
+          console.log('📡 Connection lost, reconnecting...');
+          setTimeout(() => connectToWhatsApp(), 3000);
+        } else if (statusCode === DisconnectReason.connectionReplaced) {
+          console.log('🔄 Connection replaced, stopping...');
+          // Don't reconnect if connection was replaced
+        } else if (statusCode === DisconnectReason.loggedOut) {
+          console.log('🚫 Logged out, manual reconnection required');
+          // Don't reconnect if logged out
+        } else if (statusCode === DisconnectReason.restartRequired) {
+          console.log('🔄 Restart required, restarting...');
+          setTimeout(() => connectToWhatsApp(), 2000);
+        } else if (shouldReconnect) {
           console.log('🔄 Reconnecting in 3 seconds...');
-          setTimeout(() => {
-            connectToWhatsApp();
-          }, 3000);
-        } else {
-          console.log('🚫 Manual reconnection required');
+          setTimeout(() => connectToWhatsApp(), 3000);
         }
       } else if (connection === 'open') {
         console.log('✅ Connected to WhatsApp successfully!');

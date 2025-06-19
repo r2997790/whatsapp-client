@@ -1,27 +1,15 @@
 {
-  "name": "whatsapp-frontend-client",
-  "version": "2.0.0",
-  "description": "WhatsApp Frontend Client with Socket.io Integration",
+  "name": "whatsapp-frontend",
+  "version": "1.0.0",
+  "description": "WhatsApp Frontend Service",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js",
-    "dev": "nodemon app.js",
-    "test": "node -e \"console.log('Frontend service test passed')\""
+    "start": "node app.js"
   },
   "dependencies": {
     "express": "^4.18.2"
   },
-  "devDependencies": {
-    "nodemon": "^3.0.2"
-  },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "keywords": ["whatsapp", "frontend", "socket.io", "express"],
-  "author": "WhatsApp Web Client",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/your-username/whatsapp-client"
   }
 }

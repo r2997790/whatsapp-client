@@ -7,9 +7,11 @@ A web-based WhatsApp messaging client that uses the Baileys API to send direct m
 - 📱 **QR Code Authentication** - Scan QR code with your WhatsApp mobile app
 - 💬 **Single Messages** - Send individual messages to specific numbers
 - 📨 **Bulk Messaging** - Send the same message to multiple recipients
+- 👥 **Group Messaging** - Send messages to WhatsApp groups
 - 📊 **Results Tracking** - Track successful and failed message deliveries
 - 🔄 **Real-time Status** - Live connection status updates
 - 🌐 **Web Interface** - Easy-to-use web dashboard
+- 🛡️ **Anti-Loop Protection** - Built-in safeguards against connection loops
 
 ## Quick Start
 
@@ -71,7 +73,38 @@ A web-based WhatsApp messaging client that uses the Baileys API to send direct m
 - Type your message
 - Click "Send Bulk Messages"
 
-### 4. View Results
+### 4. Send Messages to WhatsApp Groups
+
+The application now supports sending messages to WhatsApp groups! Here are the methods:
+
+#### Method 1: Using Group Phone Number Format
+Some groups have a phone number format that can be used directly:
+- Look for the group's phone number in group info
+- Use it like a regular phone number in the forms
+- Format: `[countrycode][groupnumber]` (without + symbol)
+
+#### Method 2: Using Group ID from WhatsApp Web
+1. Open WhatsApp Web in your browser
+2. Click on the group you want to message
+3. Look at the URL - it will contain the group ID
+4. Group ID format: `[numbers]@g.us`
+5. Use the Group ID in the phone number field
+
+**Example:** If URL shows `120363123456789@g.us`, use that in the phone number field
+
+#### Important Notes for Group Messaging:
+- ⚠️ You must be an admin or have permission to send messages to the group
+- ⚠️ Some groups may have restrictions on who can send messages
+- ⚠️ Group messaging follows the same rate limits as individual messages
+- ⚠️ Test with a single message first before sending bulk messages to groups
+
+#### Tips for Group Messaging:
+- Always verify the group ID is correct with a test message
+- Consider the time zones of group members
+- Keep messages relevant and respectful to the group's purpose
+- Use bulk messaging sparingly to avoid being flagged as spam
+
+### 5. View Results
 - Check the "Results" tab to see delivery status
 - View statistics for successful and failed deliveries
 - Clear results when needed
@@ -81,6 +114,7 @@ A web-based WhatsApp messaging client that uses the Baileys API to send direct m
 Always include the country code without the + symbol:
 - ✅ Correct: `1234567890` (US number)
 - ✅ Correct: `441234567890` (UK number)
+- ✅ Correct: `120363123456789@g.us` (WhatsApp group)
 - ❌ Wrong: `+1234567890`
 - ❌ Wrong: `01234567890` (missing country code)
 
@@ -101,6 +135,14 @@ Always include the country code without the + symbol:
 - WhatsApp session data is stored in `/tmp/auth_info_baileys/`
 - On Railway's ephemeral filesystem, you'll need to re-scan QR code after each deployment
 - For persistent storage, consider upgrading to Railway Pro with volume mounts
+
+## Recent Updates
+
+### Version 1.1.0
+- ✅ **Fixed:** Network error "Cannot read properties of undefined (reading 'target')" during bulk messaging
+- ✅ **Added:** Complete WhatsApp Groups messaging support with detailed guide
+- ✅ **Improved:** Tab switching logic to prevent JavaScript errors
+- ✅ **Enhanced:** User interface with dedicated Groups Guide tab
 
 ## Important Notes
 
@@ -134,11 +176,18 @@ Always include the country code without the + symbol:
 3. Check if the recipient number exists on WhatsApp
 4. Try sending a single message first before bulk sending
 
+### Group Messages Not Working
+1. Verify you have permission to send messages to the group
+2. Check if the group ID format is correct (`[numbers]@g.us`)
+3. Ensure you're a member of the group
+4. Test with a single message before bulk sending
+
 ### Connection Issues
 1. Check your internet connection
 2. Verify Railway deployment status
 3. Try disconnecting and reconnecting WhatsApp
 4. Check Railway service logs for errors
+5. Use the "Reset Connection" button if QR scan fails repeatedly
 
 ## Support
 

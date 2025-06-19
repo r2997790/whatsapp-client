@@ -3,607 +3,153 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WhatsApp Web Client</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <title>WhatsApp Client</title>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #128C7E 0%, #075E54 100%);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .header {
-            background: #075E54;
-            color: white;
-            padding: 1rem 2rem;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .header h1 {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 1.5rem;
-        }
-
-        .status-indicator {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 0.9rem;
-            font-weight: 500;
-            transition: all 0.3s ease;
-        }
-
-        .status-disconnected { background: #dc3545; }
-        .status-connected { background: #28a745; }
-        .status-qr_ready { background: #ffc107; color: #000; }
-        .status-reconnecting { background: #17a2b8; }
-        .status-error { background: #dc3545; }
-
-        .main-container {
-            flex: 1;
-            display: flex;
-            max-width: 1400px;
-            margin: 0 auto;
-            width: 100%;
-            padding: 2rem;
-            gap: 2rem;
-        }
-
-        .connection-panel {
-            background: white;
-            border-radius: 16px;
-            padding: 2rem;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-            min-width: 400px;
-            max-width: 500px;
-            height: fit-content;
-        }
-
-        .connection-title {
-            font-size: 1.5rem;
-            margin-bottom: 1rem;
-            color: #075E54;
-            text-align: center;
-        }
-
-        .qr-container {
-            background: #f8f9fa;
-            border-radius: 12px;
-            padding: 2rem;
-            margin: 2rem 0;
-            min-height: 300px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            border: 2px dashed #ddd;
-            transition: all 0.3s ease;
-        }
-
-        .qr-container.has-qr {
-            border-color: #128C7E;
-            background: white;
-        }
-
-        .qr-code {
-            max-width: 100%;
-            height: auto;
-            border-radius: 8px;
-        }
-
-        .qr-placeholder {
-            color: #6c757d;
-            font-size: 1.1rem;
-            text-align: center;
-        }
-
-        .connect-button {
-            background: #25D366;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 25px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin: 1rem auto;
-        }
-
-        .connect-button:hover {
-            background: #128C7E;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-        }
-
-        .connect-button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .error-panel {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 1rem;
-            border-radius: 8px;
-            margin: 1rem 0;
-            border: 1px solid #f5c6cb;
-        }
-
-        .warning-panel {
-            background: #fff3cd;
-            color: #856404;
-            padding: 1rem;
-            border-radius: 8px;
-            margin: 1rem 0;
-            border: 1px solid #ffeaa7;
-        }
-
-        .status-panel {
-            background: #d1ecf1;
-            color: #0c5460;
-            padding: 1rem;
-            border-radius: 8px;
-            margin: 1rem 0;
-            border: 1px solid #b8daff;
-        }
-
-        .debug-info {
-            margin-top: 1rem;
-            padding: 1rem;
-            background: #f8f9fa;
-            border-radius: 8px;
-            font-size: 0.8rem;
-            font-family: monospace;
-        }
-
-        .test-button {
-            background: #007bff;
-            color: white;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 4px;
-            font-size: 0.8rem;
-            cursor: pointer;
-            margin: 4px;
-        }
-
-        .test-button:hover {
-            background: #0056b3;
-        }
-
-        .notification {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 1rem 1.5rem;
-            border-radius: 8px;
-            color: white;
-            z-index: 1000;
-            animation: slideIn 0.3s ease;
-            max-width: 300px;
-        }
-
-        .notification.success { background: #28a745; }
-        .notification.error { background: #dc3545; }
-        .notification.warning { background: #ffc107; color: #000; }
-
-        @keyframes slideIn {
-            from { transform: translateX(100%); }
-            to { transform: translateX(0); }
-        }
-
-        @media (max-width: 768px) {
-            .main-container {
-                flex-direction: column;
-                padding: 1rem;
-            }
-            
-            .connection-panel {
-                min-width: unset;
-                max-width: unset;
-            }
-        }
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f0f2f5; }
+        .container { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .status { padding: 15px; margin: 10px 0; border-radius: 8px; font-weight: bold; }
+        .connected { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .disconnected { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .qr-ready { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .qr-code { text-align: center; margin: 20px 0; }
+        .qr-code img { max-width: 300px; border: 1px solid #ddd; border-radius: 8px; }
+        .message-form { margin: 20px 0; }
+        .form-group { margin: 15px 0; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+        .form-group input, .form-group textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 16px; }
+        .btn { background: #25d366; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        .btn:hover { background: #128c7e; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        h1 { color: #128c7e; text-align: center; }
+        h2 { color: #075e54; border-bottom: 2px solid #25d366; padding-bottom: 10px; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>
-            <i class="fab fa-whatsapp"></i>
-            WhatsApp Web Client
-        </h1>
-        <div class="status-indicator" id="statusIndicator">
-            <i class="fas fa-circle" id="statusIcon"></i>
-            <span id="statusText">Checking...</span>
+    <div class="container">
+        <h1>🚀 WhatsApp Client</h1>
+        
+        <div id="status" class="status disconnected">
+            Status: Disconnected
         </div>
-    </div>
-
-    <div class="main-container">
-        <div class="connection-panel">
-            <div class="connection-content">
-                <h2 class="connection-title">
-                    <i class="fas fa-qrcode"></i>
-                    Connect to WhatsApp
-                </h2>
-                
-                <div id="statusMessages"></div>
-                
-                <div class="qr-container" id="qrContainer">
-                    <div class="qr-placeholder" id="qrPlaceholder">
-                        <i class="fas fa-mobile-alt" style="font-size: 3rem; margin-bottom: 1rem; display: block;"></i>
-                        <span id="qrPlaceholderText">Checking backend connection...</span>
-                        <p style="margin-top: 1rem; font-size: 0.9rem;">
-                            <span id="instructionText">Please wait while we connect to the backend service.</span>
-                        </p>
-                    </div>
-                    <img id="qrCode" class="qr-code" style="display: none;" alt="QR Code">
-                </div>
-
-                <button class="connect-button" id="connectButton" onclick="connectWhatsApp()" disabled>
-                    <i class="fas fa-spinner fa-spin"></i>
-                    Connecting...
-                </button>
-
-                <div class="debug-info">
-                    <strong>🔧 Connection Status:</strong><br>
-                    Backend: <span id="backendStatus">Testing...</span><br>
-                    Socket: <span id="socketStatus">Not connected</span><br>
-                    Last Check: <span id="lastCheck">-</span><br>
-                    
-                    <div style="margin-top: 8px;">
-                        <button class="test-button" onclick="testBackend()">Test Backend</button>
-                        <button class="test-button" onclick="testSocket()">Test Socket</button>
-                        <button class="test-button" onclick="forceReconnect()">Force Reconnect</button>
-                    </div>
-                </div>
+        
+        <div id="qr-section" style="display: none;">
+            <h2>📱 Scan QR Code</h2>
+            <div class="qr-code">
+                <img id="qr-image" src="" alt="QR Code">
+                <p>Scan this QR code with your WhatsApp mobile app</p>
             </div>
         </div>
+        
+        <div id="message-section" style="display: none;">
+            <h2>💬 Send Message</h2>
+            <form id="message-form" class="message-form">
+                <div class="form-group">
+                    <label for="number">Phone Number (with country code, no +):</label>
+                    <input type="text" id="number" placeholder="e.g., 1234567890" required>
+                </div>
+                <div class="form-group">
+                    <label for="message">Message:</label>
+                    <textarea id="message" rows="4" placeholder="Type your message here..." required></textarea>
+                </div>
+                <button type="submit" class="btn">Send Message</button>
+            </form>
+        </div>
+        
+        <div id="response" style="margin-top: 20px;"></div>
+        
+        <button id="connect-btn" class="btn" onclick="connectWhatsApp()">Connect WhatsApp</button>
     </div>
 
-    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
     <script>
-        // Configuration
-        const BACKEND_URL = 'https://whatsapp-service-production-66d3.up.railway.app';
-        
-        // Global state
-        let socket = null;
-        let connectionStatus = 'checking';
-        let backendOnline = false;
-        let socketConnected = false;
-        
-        // DOM Elements
-        const statusIndicator = document.getElementById('statusIndicator');
-        const statusText = document.getElementById('statusText');
-        const statusIcon = document.getElementById('statusIcon');
-        const statusMessages = document.getElementById('statusMessages');
-        const qrContainer = document.getElementById('qrContainer');
-        const qrCode = document.getElementById('qrCode');
-        const qrPlaceholder = document.getElementById('qrPlaceholder');
-        const qrPlaceholderText = document.getElementById('qrPlaceholderText');
-        const instructionText = document.getElementById('instructionText');
-        const connectButton = document.getElementById('connectButton');
-        const backendStatus = document.getElementById('backendStatus');
-        const socketStatus = document.getElementById('socketStatus');
-        const lastCheck = document.getElementById('lastCheck');
+        const socket = io();
+        const statusEl = document.getElementById('status');
+        const qrSection = document.getElementById('qr-section');
+        const messageSection = document.getElementById('message-section');
+        const qrImage = document.getElementById('qr-image');
+        const connectBtn = document.getElementById('connect-btn');
+        const responseEl = document.getElementById('response');
 
-        // Utility functions
-        function log(message, type = 'info') {
-            const timestamp = new Date().toLocaleTimeString();
-            console.log(`[${timestamp}] ${type.toUpperCase()}: ${message}`);
-            lastCheck.textContent = timestamp;
-        }
+        socket.on('connection-status', (status) => {
+            updateStatus(status);
+        });
 
-        function showNotification(message, type = 'info') {
-            const notification = document.createElement('div');
-            notification.className = `notification ${type}`;
-            notification.textContent = message;
-            document.body.appendChild(notification);
-            
-            setTimeout(() => {
-                notification.remove();
-            }, 5000);
-        }
-
-        function showStatusMessage(message, type = 'status') {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `${type}-panel`;
-            messageDiv.innerHTML = `<strong>${type === 'error' ? '❌' : type === 'warning' ? '⚠️' : 'ℹ️'}</strong> ${message}`;
-            statusMessages.appendChild(messageDiv);
-            
-            // Remove old messages (keep last 3)
-            while (statusMessages.children.length > 3) {
-                statusMessages.removeChild(statusMessages.firstChild);
-            }
-        }
+        socket.on('qr-code', (qrData) => {
+            qrImage.src = qrData;
+            qrSection.style.display = 'block';
+        });
 
         function updateStatus(status) {
-            connectionStatus = status;
-            statusIndicator.className = `status-indicator status-${status}`;
+            statusEl.className = 'status';
+            connectBtn.style.display = 'block';
             
-            switch (status) {
+            switch(status) {
                 case 'connected':
-                    statusText.textContent = 'Connected';
-                    statusIcon.className = 'fas fa-check-circle';
-                    connectButton.innerHTML = '<i class="fas fa-sync"></i> Reconnect';
-                    connectButton.disabled = false;
-                    qrPlaceholderText.textContent = 'Connected to WhatsApp!';
-                    instructionText.textContent = 'You can now send messages.';
+                    statusEl.className += ' connected';
+                    statusEl.textContent = 'Status: ✅ Connected to WhatsApp';
+                    qrSection.style.display = 'none';
+                    messageSection.style.display = 'block';
+                    connectBtn.style.display = 'none';
                     break;
-                case 'qr_ready':
-                    statusText.textContent = 'Scan QR Code';
-                    statusIcon.className = 'fas fa-qrcode';
-                    connectButton.innerHTML = '<i class="fas fa-sync"></i> Refresh QR';
-                    connectButton.disabled = false;
-                    qrPlaceholderText.textContent = 'QR Code Ready';
-                    instructionText.textContent = 'Scan with WhatsApp mobile app';
+                case 'qr-ready':
+                    statusEl.className += ' qr-ready';
+                    statusEl.textContent = 'Status: 📱 QR Code Ready - Scan with your phone';
+                    messageSection.style.display = 'none';
                     break;
-                case 'reconnecting':
-                    statusText.textContent = 'Connecting...';
-                    statusIcon.className = 'fas fa-spinner fa-spin';
-                    connectButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Connecting...';
-                    connectButton.disabled = true;
-                    qrPlaceholderText.textContent = 'Connecting to WhatsApp...';
-                    instructionText.textContent = 'Please wait...';
-                    break;
-                case 'error':
-                    statusText.textContent = 'Connection Error';
-                    statusIcon.className = 'fas fa-exclamation-triangle';
-                    connectButton.innerHTML = '<i class="fas fa-redo"></i> Retry Connection';
-                    connectButton.disabled = false;
-                    qrPlaceholderText.textContent = 'Connection Error';
-                    instructionText.textContent = 'Check debug info below for details.';
+                case 'disconnected':
+                    statusEl.className += ' disconnected';
+                    statusEl.textContent = 'Status: ❌ Disconnected';
+                    qrSection.style.display = 'none';
+                    messageSection.style.display = 'none';
                     break;
                 default:
-                    statusText.textContent = 'Disconnected';
-                    statusIcon.className = 'fas fa-times-circle';
-                    connectButton.innerHTML = '<i class="fas fa-plug"></i> Connect WhatsApp';
-                    connectButton.disabled = !backendOnline;
-                    qrPlaceholderText.textContent = backendOnline ? 'Ready to Connect' : 'Backend Unavailable';
-                    instructionText.textContent = backendOnline ? 'Click Connect WhatsApp to begin' : 'Backend service is not responding';
+                    statusEl.className += ' disconnected';
+                    statusEl.textContent = 'Status: ⏳ Connecting...';
             }
         }
 
-        function showQRCode(qrDataUrl) {
-            qrCode.src = qrDataUrl;
-            qrCode.style.display = 'block';
-            qrPlaceholder.style.display = 'none';
-            qrContainer.classList.add('has-qr');
-            updateStatus('qr_ready');
-            log('QR Code displayed successfully');
-            showNotification('QR Code generated! Scan with your phone', 'success');
+        function connectWhatsApp() {
+            socket.emit('connect-whatsapp');
+            connectBtn.disabled = true;
+            setTimeout(() => connectBtn.disabled = false, 3000);
         }
 
-        function hideQRCode() {
-            qrCode.style.display = 'none';
-            qrPlaceholder.style.display = 'block';
-            qrContainer.classList.remove('has-qr');
-        }
-
-        // Backend testing
-        async function testBackend() {
-            log('Testing backend health...');
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 10000);
-                
-                const response = await fetch(`${BACKEND_URL}/health`, {
-                    method: 'GET',
-                    headers: {
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/json',
-                    },
-                    mode: 'cors',
-                    signal: controller.signal
-                });
-                
-                clearTimeout(timeoutId);
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    backendOnline = true;
-                    backendStatus.textContent = `✅ Online (${data.whatsapp_status})`;
-                    log(`Backend health OK: ${data.whatsapp_status}`);
-                    showStatusMessage(`Backend is online. WhatsApp status: ${data.whatsapp_status}`, 'status');
-                    
-                    if (connectionStatus === 'checking') {
-                        updateStatus('disconnected');
-                    }
-                    
-                    return true;
-                } else {
-                    throw new Error(`HTTP ${response.status}`);
-                }
-            } catch (error) {
-                backendOnline = false;
-                backendStatus.textContent = `❌ Offline (${error.message})`;
-                log(`Backend health failed: ${error.message}`, 'error');
-                
-                if (error.name === 'AbortError') {
-                    showStatusMessage('Backend health check timed out. The service may be starting up.', 'warning');
-                } else {
-                    showStatusMessage(`Backend is not responding: ${error.message}`, 'error');
-                }
-                
-                updateStatus('error');
-                return false;
-            }
-        }
-
-        // Socket testing
-        function testSocket() {
-            if (!backendOnline) {
-                showNotification('Backend must be online first', 'warning');
+        document.getElementById('message-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const number = document.getElementById('number').value;
+            const message = document.getElementById('message').value;
+            
+            if (!number || !message) {
+                responseEl.innerHTML = '<div class="status disconnected">Please fill in all fields</div>';
                 return;
             }
-
-            log('Testing Socket.io connection...');
             
             try {
-                if (socket) {
-                    socket.disconnect();
-                }
-                
-                socket = io(BACKEND_URL, {
-                    transports: ['websocket', 'polling'],
-                    timeout: 10000,
-                    forceNew: true,
-                    cors: {
-                        origin: "*",
-                        methods: ["GET", "POST"]
-                    }
-                });
-
-                socket.on('connect', () => {
-                    socketConnected = true;
-                    socketStatus.textContent = '✅ Connected';
-                    log('Socket.io connected successfully');
-                    showNotification('Socket connected to backend', 'success');
-                    
-                    if (connectionStatus === 'error') {
-                        updateStatus('disconnected');
-                    }
-                });
-
-                socket.on('disconnect', (reason) => {
-                    socketConnected = false;
-                    socketStatus.textContent = `❌ Disconnected (${reason})`;
-                    log(`Socket.io disconnected: ${reason}`, 'error');
-                });
-
-                socket.on('connect_error', (error) => {
-                    socketConnected = false;
-                    socketStatus.textContent = `❌ Error (${error.type})`;
-                    log(`Socket.io connection error: ${error.message}`, 'error');
-                    showNotification(`Socket error: ${error.type}`, 'error');
-                });
-
-                socket.on('status_update', (data) => {
-                    log(`Status update: ${data.status}`);
-                    updateStatus(data.status);
-                    
-                    if (data.qr) {
-                        showQRCode(data.qr);
-                    } else if (data.status === 'connected') {
-                        hideQRCode();
-                    }
-                });
-
-                socket.on('qr_updated', (data) => {
-                    log('QR code received via socket');
-                    showQRCode(data.qr);
-                });
-
-            } catch (error) {
-                log(`Socket initialization failed: ${error.message}`, 'error');
-                showNotification(`Socket initialization failed: ${error.message}`, 'error');
-            }
-        }
-
-        // Force reconnect
-        async function forceReconnect() {
-            log('Force reconnecting...');
-            updateStatus('reconnecting');
-            
-            try {
-                // Try socket first
-                if (socket && socketConnected) {
-                    socket.emit('reconnect_whatsapp');
-                    showNotification('Reconnect sent via socket', 'success');
-                }
-                
-                // Try API as backup
-                const response = await fetch(`${BACKEND_URL}/api/force-reconnect`, {
+                const response = await fetch('/api/send-message', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    mode: 'cors'
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ number, message })
                 });
                 
-                if (response.ok) {
-                    const data = await response.json();
-                    log(`API reconnect successful: ${data.message}`);
-                    showNotification('Reconnection initiated', 'success');
-                } else {
-                    throw new Error(`HTTP ${response.status}`);
-                }
+                const result = await response.json();
                 
+                if (result.success) {
+                    responseEl.innerHTML = '<div class="status connected">✅ Message sent successfully!</div>';
+                    document.getElementById('message').value = '';
+                } else {
+                    responseEl.innerHTML = `<div class="status disconnected">❌ Error: ${result.error}</div>`;
+                }
             } catch (error) {
-                log(`Force reconnect failed: ${error.message}`, 'error');
-                showNotification(`Reconnect failed: ${error.message}`, 'error');
-                updateStatus('error');
+                responseEl.innerHTML = `<div class="status disconnected">❌ Network error: ${error.message}</div>`;
             }
-        }
+        });
 
-        // Main connect function
-        async function connectWhatsApp() {
-            if (!backendOnline) {
-                showNotification('Backend is not available. Please try again later.', 'error');
-                return;
-            }
-            
-            log('Connect WhatsApp clicked');
-            updateStatus('reconnecting');
-            
-            // Ensure socket is connected first
-            if (!socketConnected) {
-                await testSocket();
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-            
-            if (socketConnected) {
-                socket.emit('reconnect_whatsapp');
-                showNotification('Connection request sent', 'success');
-            } else {
-                // Fallback to API
-                await forceReconnect();
-            }
-        }
-
-        // Initialization
-        async function init() {
-            log('Initializing WhatsApp Web Client...');
-            
-            // Test backend first
-            const backendOk = await testBackend();
-            
-            if (backendOk) {
-                // Wait a moment then test socket
-                setTimeout(testSocket, 1000);
-            } else {
-                showStatusMessage('Backend service is not responding. Please check if the backend is deployed and running.', 'error');
-            }
-        }
-
-        // Start initialization when page loads
-        document.addEventListener('DOMContentLoaded', init);
-        
-        // Auto-retry backend connection every 30 seconds if offline
-        setInterval(() => {
-            if (!backendOnline) {
-                log('Auto-retrying backend connection...');
-                testBackend();
-            }
-        }, 30000);
+        // Check initial status
+        fetch('/api/status')
+            .then(res => res.json())
+            .then(data => updateStatus(data.status))
+            .catch(console.error);
     </script>
 </body>
 </html>

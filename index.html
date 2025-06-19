@@ -36,6 +36,7 @@
         .connecting { background: #d1ecf1; color: #0c5460; border: 2px solid #bee5eb; }
         .qr-ready { background: #fff3cd; color: #856404; border: 2px solid #ffeaa7; }
         .error { background: #f8d7da; color: #721c24; border: 2px solid #f5c6cb; }
+        .cooldown { background: #e2e3e5; color: #383d41; border: 2px solid #d1ecf1; }
         .qr-code { 
             text-align: center; 
             margin: 30px 0; 
@@ -50,26 +51,6 @@
             border: 3px solid #25d366; 
             border-radius: 15px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-        }
-        .qr-loading {
-            text-align: center;
-            padding: 40px;
-            background: #f8f9fa;
-            border-radius: 15px;
-            margin: 20px 0;
-        }
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #25d366;
-            border-radius: 50%;
-            width: 50px;
-            height: 50px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
         }
         .tabs {
             display: flex;
@@ -131,6 +112,7 @@
             transition: all 0.3s ease;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            margin: 5px;
         }
         .btn:hover { 
             transform: translateY(-2px);
@@ -147,6 +129,12 @@
         }
         .btn-secondary:hover {
             box-shadow: 0 5px 15px rgba(108, 117, 125, 0.4);
+        }
+        .btn-danger {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+        }
+        .btn-danger:hover {
+            box-shadow: 0 5px 15px rgba(220, 53, 69, 0.4);
         }
         h1 { 
             color: #128c7e; 
@@ -222,18 +210,27 @@
             color: #666;
             font-weight: 600;
         }
+        .control-buttons {
+            text-align: center;
+            margin: 20px 0;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 10px;
+        }
         @media (max-width: 768px) {
             .container { padding: 20px; margin: 10px; }
             h1 { font-size: 2em; }
             .tabs { flex-wrap: wrap; }
             .tab { flex: 1; min-width: 120px; }
+            .control-buttons { flex-direction: column; }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>📱 WhatsApp Bulk Messaging</h1>
-        <p class="subtitle">Send direct WhatsApp messages using Baileys API</p>
+        <p class="subtitle">Anti-Loop Protection Enabled</p>
         
         <div id="status" class="status disconnected">
             Status: Initializing...
@@ -243,19 +240,13 @@
             Debug info will appear here...
         </div>
         
-        <div id="qr-loading" class="qr-loading" style="display: none;">
-            <div class="spinner"></div>
-            <p><strong>Generating QR Code...</strong></p>
-            <p>Please wait while we establish a connection to WhatsApp</p>
-        </div>
-        
         <div id="qr-section" style="display: none;">
             <h2>📱 Scan QR Code</h2>
             <div class="qr-code">
                 <img id="qr-image" src="" alt="QR Code">
                 <p><strong>Scan this QR code with your WhatsApp mobile app</strong></p>
                 <p>Open WhatsApp → Settings → Linked Devices → Link a Device</p>
-                <p><small>QR code will expire in 60 seconds. Click "Connect WhatsApp" again if needed.</small></p>
+                <p><small><strong>⚠️ If scan fails repeatedly, click "Reset Connection" below</strong></small></p>
             </div>
         </div>
         
@@ -320,33 +311,27 @@
         
         <div id="response" style="margin-top: 20px;"></div>
         
-        <div style="text-align: center; margin-top: 20px;">
+        <div class="control-buttons">
             <button id="connect-btn" class="btn" onclick="connectWhatsApp()">Connect WhatsApp</button>
-            <button id="debug-btn" class="btn btn-secondary" onclick="toggleDebug()" style="margin-left: 10px;">Toggle Debug</button>
-            <button id="refresh-qr-btn" class="btn btn-secondary" onclick="refreshQR()" style="margin-left: 10px; display: none;">Refresh QR</button>
+            <button id="reset-btn" class="btn btn-danger" onclick="resetConnection()">Reset Connection</button>
+            <button id="debug-btn" class="btn btn-secondary" onclick="toggleDebug()">Toggle Debug</button>
         </div>
     </div>
 
     <script>
-        const socket = io({
-            transports: ['websocket', 'polling'],
-            timeout: 20000,
-            forceNew: true
-        });
+        const socket = io();
         
         const statusEl = document.getElementById('status');
         const qrSection = document.getElementById('qr-section');
-        const qrLoading = document.getElementById('qr-loading');
         const mainSection = document.getElementById('main-section');
         const qrImage = document.getElementById('qr-image');
         const connectBtn = document.getElementById('connect-btn');
-        const refreshQrBtn = document.getElementById('refresh-qr-btn');
+        const resetBtn = document.getElementById('reset-btn');
         const responseEl = document.getElementById('response');
         const debugEl = document.getElementById('debug');
         
         let debugMode = false;
         let messageResults = [];
-        let qrTimeout = null;
 
         function log(message) {
             const timestamp = new Date().toLocaleTimeString();
@@ -366,11 +351,9 @@
         }
 
         function switchTab(tabName) {
-            // Remove active class from all tabs and content
             document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
             
-            // Add active class to selected tab and content
             event.target.classList.add('active');
             document.getElementById(tabName + '-tab').classList.add('active');
         }
@@ -414,36 +397,32 @@
 
         function connectWhatsApp() {
             log('Requesting WhatsApp connection...');
+            socket.emit('connect-whatsapp');
             connectBtn.disabled = true;
             connectBtn.textContent = 'Connecting...';
             
-            // Show loading spinner
-            qrLoading.style.display = 'block';
-            qrSection.style.display = 'none';
-            mainSection.style.display = 'none';
-            
-            socket.emit('connect-whatsapp');
-            
-            // Reset button after timeout
             setTimeout(() => {
                 connectBtn.disabled = false;
                 connectBtn.textContent = 'Connect WhatsApp';
-            }, 10000);
+            }, 5000);
         }
 
-        function refreshQR() {
-            log('Requesting fresh QR code...');
-            connectWhatsApp();
+        function resetConnection() {
+            log('Requesting connection reset...');
+            fetch('/api/reset', { method: 'POST' })
+                .then(res => res.json())
+                .then(data => {
+                    log('Reset response: ' + data.message);
+                    showResponse('Connection reset - try connecting again', 'success');
+                })
+                .catch(error => {
+                    log('Reset error: ' + error.message);
+                    showResponse('Reset failed', 'error');
+                });
         }
 
         socket.on('connect', () => {
             log('Connected to server');
-            showResponse('Connected to server', 'success');
-        });
-
-        socket.on('disconnect', () => {
-            log('Disconnected from server');
-            showResponse('Disconnected from server', 'error');
         });
 
         socket.on('connection-status', (status) => {
@@ -455,29 +434,12 @@
             if (qrData) {
                 log('QR code received, length: ' + qrData.length);
                 qrImage.src = qrData;
-                qrImage.onload = () => {
-                    qrLoading.style.display = 'none';
-                    qrSection.style.display = 'block';
-                    refreshQrBtn.style.display = 'inline-block';
-                    log('QR code displayed successfully');
-                };
-                qrImage.onerror = () => {
-                    log('Error loading QR code image');
-                    qrLoading.style.display = 'none';
-                    showResponse('Error loading QR code', 'error');
-                };
-                
-                // Set QR expiration timer
-                if (qrTimeout) clearTimeout(qrTimeout);
-                qrTimeout = setTimeout(() => {
-                    log('QR code expired');
-                    showResponse('QR code expired. Click "Refresh QR" for a new one.', 'error');
-                }, 60000); // 60 seconds
+                qrSection.style.display = 'block';
+                mainSection.style.display = 'none';
+                log('QR code displayed successfully');
             } else {
                 qrSection.style.display = 'none';
-                qrLoading.style.display = 'none';
-                refreshQrBtn.style.display = 'none';
-                if (qrTimeout) clearTimeout(qrTimeout);
+                log('QR code cleared');
             }
         });
 
@@ -490,11 +452,8 @@
                     statusEl.className += ' connected';
                     statusEl.textContent = 'Status: ✅ Connected to WhatsApp';
                     qrSection.style.display = 'none';
-                    qrLoading.style.display = 'none';
                     mainSection.style.display = 'block';
                     connectBtn.style.display = 'none';
-                    refreshQrBtn.style.display = 'none';
-                    if (qrTimeout) clearTimeout(qrTimeout);
                     break;
                 case 'connecting':
                     statusEl.className += ' connecting';
@@ -510,19 +469,19 @@
                     statusEl.className += ' disconnected';
                     statusEl.textContent = 'Status: ❌ Disconnected';
                     qrSection.style.display = 'none';
-                    qrLoading.style.display = 'none';
                     mainSection.style.display = 'none';
-                    refreshQrBtn.style.display = 'none';
-                    if (qrTimeout) clearTimeout(qrTimeout);
+                    break;
+                case 'cooldown':
+                    statusEl.className += ' cooldown';
+                    statusEl.textContent = 'Status: ⏳ Cooldown Active - Wait before retrying';
+                    qrSection.style.display = 'none';
+                    mainSection.style.display = 'none';
                     break;
                 case 'error':
                     statusEl.className += ' error';
                     statusEl.textContent = 'Status: ❌ Connection Error';
                     qrSection.style.display = 'none';
-                    qrLoading.style.display = 'none';
                     mainSection.style.display = 'none';
-                    refreshQrBtn.style.display = 'none';
-                    if (qrTimeout) clearTimeout(qrTimeout);
                     break;
                 default:
                     statusEl.className += ' disconnected';
@@ -612,12 +571,10 @@
                     
                     showResponse(`✅ Bulk send completed: ${successful}/${total} successful`, 'success');
                     
-                    // Add results
                     result.results.forEach(r => {
                         addResult(r.number, r.success, r.error);
                     });
                     
-                    // Switch to results tab
                     switchTab('results');
                     document.querySelector('.tab:nth-child(3)').click();
                     
@@ -643,21 +600,6 @@
             .catch(error => {
                 log('Error getting status: ' + error.message);
             });
-
-        // Auto-refresh status every 10 seconds
-        setInterval(() => {
-            fetch('/api/status')
-                .then(res => res.json())
-                .then(data => {
-                    const currentStatus = statusEl.textContent.split(': ')[1];
-                    if (data.status !== currentStatus) {
-                        updateStatus(data.status);
-                    }
-                })
-                .catch(() => {
-                    // Ignore errors in background refresh
-                });
-        }, 10000);
     </script>
 </body>
 </html>

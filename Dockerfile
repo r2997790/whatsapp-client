@@ -1,17 +1,18 @@
 # Use Node.js LTS version
 FROM node:18-alpine
 
-# Install required system dependencies
+# Install required system dependencies including git
 RUN apk add --no-cache \
+    git \
     chromium \
     nss \
     freetype \
-    freetype-dev \
     harfbuzz \
     ca-certificates \
-    ttf-freefont
+    ttf-freefont \
+    curl
 
-# Set environment variables for Puppeteer to use system Chromium
+# Set environment variables
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
     NODE_ENV=production
@@ -22,8 +23,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies (use npm install since there's no package-lock.json)
-RUN npm install --only=production && npm cache clean --force
+# Install dependencies
+RUN npm install --omit=dev && npm cache clean --force
 
 # Copy application code
 COPY . .

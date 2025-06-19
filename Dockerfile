@@ -1,5 +1,5 @@
-# Use Node.js 22.14.0 for better Baileys compatibility
-FROM node:22.14.0-alpine
+# Use Node.js 18 LTS for better Baileys 6.6.0 compatibility
+FROM node:18-alpine
 
 # Install required system dependencies including git
 RUN apk add --no-cache \

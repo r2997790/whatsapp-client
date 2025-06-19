@@ -218,6 +218,23 @@
             justify-content: center;
             gap: 10px;
         }
+        .group-info {
+            background: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .group-info h3 {
+            color: #1976d2;
+            margin-bottom: 10px;
+        }
+        .group-info ul {
+            margin-left: 20px;
+        }
+        .group-info li {
+            margin: 5px 0;
+        }
         @media (max-width: 768px) {
             .container { padding: 20px; margin: 10px; }
             h1 { font-size: 2em; }
@@ -252,9 +269,10 @@
         
         <div id="main-section" style="display: none;">
             <div class="tabs">
-                <button class="tab active" onclick="switchTab('single')">Single Message</button>
-                <button class="tab" onclick="switchTab('bulk')">Bulk Messages</button>
-                <button class="tab" onclick="switchTab('results')">Results</button>
+                <button class="tab active" onclick="switchTab('single', this)">Single Message</button>
+                <button class="tab" onclick="switchTab('bulk', this)">Bulk Messages</button>
+                <button class="tab" onclick="switchTab('groups', this)">📱 Groups Guide</button>
+                <button class="tab" onclick="switchTab('results', this)">Results</button>
             </div>
 
             <div id="single-tab" class="tab-content active">
@@ -286,6 +304,52 @@
                     </div>
                     <button type="submit" class="btn">Send Bulk Messages</button>
                 </form>
+            </div>
+
+            <div id="groups-tab" class="tab-content">
+                <h2>📱 How to Send to WhatsApp Groups</h2>
+                <div class="group-info">
+                    <h3>🎯 Method 1: Using Group Phone Number Format</h3>
+                    <p>Some groups have a phone number format that can be used directly:</p>
+                    <ul>
+                        <li>Look for the group's phone number in group info</li>
+                        <li>Use it like a regular phone number in the forms above</li>
+                        <li>Format: [countrycode][groupnumber] (without + symbol)</li>
+                    </ul>
+                </div>
+                
+                <div class="group-info">
+                    <h3>🔍 Method 2: Get Group ID from WhatsApp Web</h3>
+                    <p>To send to groups using their Group ID:</p>
+                    <ol>
+                        <li>Open WhatsApp Web in your browser</li>
+                        <li>Click on the group you want to message</li>
+                        <li>Look at the URL - it will contain the group ID</li>
+                        <li>Group ID format: [numbers]@g.us</li>
+                        <li>Use the Group ID in the phone number field</li>
+                    </ol>
+                    <p><strong>Example:</strong> If URL shows <code>120363123456789@g.us</code>, use that in the phone number field</p>
+                </div>
+
+                <div class="group-info">
+                    <h3>⚠️ Important Notes for Group Messaging</h3>
+                    <ul>
+                        <li>You must be an admin or have permission to send messages to the group</li>
+                        <li>Some groups may have restrictions on who can send messages</li>
+                        <li>Group messaging follows the same rate limits as individual messages</li>
+                        <li>Test with a single message first before sending bulk messages to groups</li>
+                    </ul>
+                </div>
+
+                <div class="group-info">
+                    <h3>💡 Tips for Group Messaging</h3>
+                    <ul>
+                        <li>Always verify the group ID is correct with a test message</li>
+                        <li>Consider the time zones of group members</li>
+                        <li>Keep messages relevant and respectful to the group's purpose</li>
+                        <li>Use bulk messaging sparingly to avoid being flagged as spam</li>
+                    </ul>
+                </div>
             </div>
 
             <div id="results-tab" class="tab-content">
@@ -350,12 +414,29 @@
             }
         }
 
-        function switchTab(tabName) {
+        function switchTab(tabName, clickedButton) {
+            // Remove active class from all tabs and tab contents
             document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
             
-            event.target.classList.add('active');
-            document.getElementById(tabName + '-tab').classList.add('active');
+            // Add active class to clicked tab (if provided) or find the tab by onclick
+            if (clickedButton) {
+                clickedButton.classList.add('active');
+            } else {
+                // If called programmatically, find and activate the correct tab
+                const tabs = document.querySelectorAll('.tab');
+                tabs.forEach(tab => {
+                    if (tab.getAttribute('onclick').includes(`'${tabName}'`)) {
+                        tab.classList.add('active');
+                    }
+                });
+            }
+            
+            // Show the selected tab content
+            const targetTab = document.getElementById(tabName + '-tab');
+            if (targetTab) {
+                targetTab.classList.add('active');
+            }
         }
 
         function showResponse(message, type = 'info') {
@@ -575,8 +656,8 @@
                         addResult(r.number, r.success, r.error);
                     });
                     
+                    // Switch to results tab programmatically (fixed to avoid event.target error)
                     switchTab('results');
-                    document.querySelector('.tab:nth-child(3)').click();
                     
                     document.getElementById('bulk-message').value = '';
                 } else {

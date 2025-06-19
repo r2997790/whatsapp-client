@@ -30,6 +30,16 @@ if (!fs.existsSync(authDir)) {
   fs.mkdirSync(authDir, { recursive: true });
 }
 
+// Create a proper logger object for Baileys
+const logger = {
+  level: 'silent',
+  info: () => {},
+  error: () => {},
+  warn: () => {},
+  debug: () => {},
+  child: () => logger
+};
+
 async function connectToWhatsApp() {
   try {
     console.log('Connecting to WhatsApp...');
@@ -38,7 +48,9 @@ async function connectToWhatsApp() {
     sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      logger: { level: 'silent' }
+      logger: logger,
+      browser: ['WhatsApp Client', 'Chrome', '10.15.7'],
+      markOnlineOnConnect: true
     });
 
     sock.ev.on('connection.update', async (update) => {
@@ -49,7 +61,7 @@ async function connectToWhatsApp() {
           qrCodeData = await QRCode.toDataURL(qr);
           connectionStatus = 'qr-ready';
           io.emit('qr-code', qrCodeData);
-          console.log('QR Code generated');
+          console.log('QR Code generated and ready');
         } catch (error) {
           console.error('QR Code error:', error);
         }
@@ -59,6 +71,7 @@ async function connectToWhatsApp() {
         const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
         console.log('Connection closed, reconnecting:', shouldReconnect);
         connectionStatus = 'disconnected';
+        qrCodeData = null;
         io.emit('connection-status', connectionStatus);
         if (shouldReconnect) {
           setTimeout(connectToWhatsApp, 3000);
@@ -77,6 +90,9 @@ async function connectToWhatsApp() {
     console.error('Connection error:', error);
     connectionStatus = 'error';
     io.emit('connection-status', connectionStatus);
+    
+    // Retry connection after error
+    setTimeout(connectToWhatsApp, 5000);
   }
 }
 
@@ -95,7 +111,10 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/api/status', (req, res) => {
-  res.json({ status: connectionStatus });
+  res.json({ 
+    status: connectionStatus,
+    hasQR: !!qrCodeData
+  });
 });
 
 app.get('/api/qr', (req, res) => {
@@ -129,13 +148,25 @@ io.on('connection', (socket) => {
   }
 
   socket.on('connect-whatsapp', () => {
-    if (connectionStatus === 'disconnected') {
+    console.log('Client requested WhatsApp connection');
+    if (connectionStatus === 'disconnected' || connectionStatus === 'error') {
       connectToWhatsApp();
     }
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected');
   });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 WhatsApp Server running on port ${PORT}`);
-  connectToWhatsApp();
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Node version: ${process.version}`);
+  
+  // Start WhatsApp connection
+  setTimeout(() => {
+    console.log('Starting WhatsApp connection...');
+    connectToWhatsApp();
+  }, 2000);
 });

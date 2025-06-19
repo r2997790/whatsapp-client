@@ -12,6 +12,7 @@
         .connected { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
         .disconnected { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
         .qr-ready { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
         .qr-code { text-align: center; margin: 20px 0; }
         .qr-code img { max-width: 300px; border: 1px solid #ddd; border-radius: 8px; }
         .message-form { margin: 20px 0; }
@@ -23,6 +24,7 @@
         .btn:disabled { background: #ccc; cursor: not-allowed; }
         h1 { color: #128c7e; text-align: center; }
         h2 { color: #075e54; border-bottom: 2px solid #25d366; padding-bottom: 10px; }
+        .debug { background: #e9ecef; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 12px; margin: 10px 0; }
     </style>
 </head>
 <body>
@@ -30,7 +32,11 @@
         <h1>🚀 WhatsApp Client</h1>
         
         <div id="status" class="status disconnected">
-            Status: Disconnected
+            Status: Initializing...
+        </div>
+        
+        <div id="debug" class="debug" style="display: none;">
+            Debug info will appear here...
         </div>
         
         <div id="qr-section" style="display: none;">
@@ -59,6 +65,7 @@
         <div id="response" style="margin-top: 20px;"></div>
         
         <button id="connect-btn" class="btn" onclick="connectWhatsApp()">Connect WhatsApp</button>
+        <button id="debug-btn" class="btn" onclick="toggleDebug()" style="background: #6c757d; margin-left: 10px;">Toggle Debug</button>
     </div>
 
     <script>
@@ -69,12 +76,37 @@
         const qrImage = document.getElementById('qr-image');
         const connectBtn = document.getElementById('connect-btn');
         const responseEl = document.getElementById('response');
+        const debugEl = document.getElementById('debug');
+        
+        let debugMode = false;
+
+        function log(message) {
+            console.log(message);
+            if (debugMode) {
+                debugEl.innerHTML += new Date().toLocaleTimeString() + ': ' + message + '<br>';
+                debugEl.scrollTop = debugEl.scrollHeight;
+            }
+        }
+
+        function toggleDebug() {
+            debugMode = !debugMode;
+            debugEl.style.display = debugMode ? 'block' : 'none';
+            if (debugMode) {
+                debugEl.innerHTML = 'Debug mode enabled<br>';
+            }
+        }
+
+        socket.on('connect', () => {
+            log('Connected to server');
+        });
 
         socket.on('connection-status', (status) => {
+            log('Status update: ' + status);
             updateStatus(status);
         });
 
         socket.on('qr-code', (qrData) => {
+            log('QR code received');
             qrImage.src = qrData;
             qrSection.style.display = 'block';
         });
@@ -102,16 +134,27 @@
                     qrSection.style.display = 'none';
                     messageSection.style.display = 'none';
                     break;
+                case 'error':
+                    statusEl.className += ' error';
+                    statusEl.textContent = 'Status: ❌ Connection Error';
+                    qrSection.style.display = 'none';
+                    messageSection.style.display = 'none';
+                    break;
                 default:
                     statusEl.className += ' disconnected';
-                    statusEl.textContent = 'Status: ⏳ Connecting...';
+                    statusEl.textContent = 'Status: ⏳ ' + status;
             }
         }
 
         function connectWhatsApp() {
+            log('Requesting WhatsApp connection...');
             socket.emit('connect-whatsapp');
             connectBtn.disabled = true;
-            setTimeout(() => connectBtn.disabled = false, 3000);
+            connectBtn.textContent = 'Connecting...';
+            setTimeout(() => {
+                connectBtn.disabled = false;
+                connectBtn.textContent = 'Connect WhatsApp';
+            }, 5000);
         }
 
         document.getElementById('message-form').addEventListener('submit', async (e) => {
@@ -121,7 +164,7 @@
             const message = document.getElementById('message').value;
             
             if (!number || !message) {
-                responseEl.innerHTML = '<div class="status disconnected">Please fill in all fields</div>';
+                responseEl.innerHTML = '<div class="status error">Please fill in all fields</div>';
                 return;
             }
             
@@ -138,18 +181,23 @@
                     responseEl.innerHTML = '<div class="status connected">✅ Message sent successfully!</div>';
                     document.getElementById('message').value = '';
                 } else {
-                    responseEl.innerHTML = `<div class="status disconnected">❌ Error: ${result.error}</div>`;
+                    responseEl.innerHTML = `<div class="status error">❌ Error: ${result.error}</div>`;
                 }
             } catch (error) {
-                responseEl.innerHTML = `<div class="status disconnected">❌ Network error: ${error.message}</div>`;
+                responseEl.innerHTML = `<div class="status error">❌ Network error: ${error.message}</div>`;
             }
         });
 
         // Check initial status
         fetch('/api/status')
             .then(res => res.json())
-            .then(data => updateStatus(data.status))
-            .catch(console.error);
+            .then(data => {
+                log('Initial status: ' + JSON.stringify(data));
+                updateStatus(data.status);
+            })
+            .catch(error => {
+                log('Error getting status: ' + error.message);
+            });
     </script>
 </body>
 </html>

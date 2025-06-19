@@ -1,5 +1,5 @@
-# Use Node.js LTS version
-FROM node:18-alpine
+# Use Node.js 22.14.0 for better Baileys compatibility
+FROM node:22.14.0-alpine
 
 # Install required system dependencies including git
 RUN apk add --no-cache \
@@ -10,7 +10,10 @@ RUN apk add --no-cache \
     harfbuzz \
     ca-certificates \
     ttf-freefont \
-    curl
+    curl \
+    python3 \
+    make \
+    g++
 
 # Set environment variables
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \

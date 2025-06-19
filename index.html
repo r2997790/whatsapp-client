@@ -33,6 +33,7 @@
         }
         .connected { background: #d4edda; color: #155724; border: 2px solid #c3e6cb; }
         .disconnected { background: #f8d7da; color: #721c24; border: 2px solid #f5c6cb; }
+        .connecting { background: #d1ecf1; color: #0c5460; border: 2px solid #bee5eb; }
         .qr-ready { background: #fff3cd; color: #856404; border: 2px solid #ffeaa7; }
         .error { background: #f8d7da; color: #721c24; border: 2px solid #f5c6cb; }
         .qr-code { 
@@ -43,10 +44,32 @@
             border-radius: 15px;
         }
         .qr-code img { 
-            max-width: 280px; 
+            max-width: 300px; 
+            width: 100%;
+            height: auto;
             border: 3px solid #25d366; 
             border-radius: 15px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .qr-loading {
+            text-align: center;
+            padding: 40px;
+            background: #f8f9fa;
+            border-radius: 15px;
+            margin: 20px 0;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #25d366;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
         .tabs {
             display: flex;
@@ -220,12 +243,19 @@
             Debug info will appear here...
         </div>
         
+        <div id="qr-loading" class="qr-loading" style="display: none;">
+            <div class="spinner"></div>
+            <p><strong>Generating QR Code...</strong></p>
+            <p>Please wait while we establish a connection to WhatsApp</p>
+        </div>
+        
         <div id="qr-section" style="display: none;">
             <h2>📱 Scan QR Code</h2>
             <div class="qr-code">
                 <img id="qr-image" src="" alt="QR Code">
                 <p><strong>Scan this QR code with your WhatsApp mobile app</strong></p>
                 <p>Open WhatsApp → Settings → Linked Devices → Link a Device</p>
+                <p><small>QR code will expire in 60 seconds. Click "Connect WhatsApp" again if needed.</small></p>
             </div>
         </div>
         
@@ -293,26 +323,36 @@
         <div style="text-align: center; margin-top: 20px;">
             <button id="connect-btn" class="btn" onclick="connectWhatsApp()">Connect WhatsApp</button>
             <button id="debug-btn" class="btn btn-secondary" onclick="toggleDebug()" style="margin-left: 10px;">Toggle Debug</button>
+            <button id="refresh-qr-btn" class="btn btn-secondary" onclick="refreshQR()" style="margin-left: 10px; display: none;">Refresh QR</button>
         </div>
     </div>
 
     <script>
-        const socket = io();
+        const socket = io({
+            transports: ['websocket', 'polling'],
+            timeout: 20000,
+            forceNew: true
+        });
+        
         const statusEl = document.getElementById('status');
         const qrSection = document.getElementById('qr-section');
+        const qrLoading = document.getElementById('qr-loading');
         const mainSection = document.getElementById('main-section');
         const qrImage = document.getElementById('qr-image');
         const connectBtn = document.getElementById('connect-btn');
+        const refreshQrBtn = document.getElementById('refresh-qr-btn');
         const responseEl = document.getElementById('response');
         const debugEl = document.getElementById('debug');
         
         let debugMode = false;
         let messageResults = [];
+        let qrTimeout = null;
 
         function log(message) {
-            console.log(message);
+            const timestamp = new Date().toLocaleTimeString();
+            console.log(`[${timestamp}] ${message}`);
             if (debugMode) {
-                debugEl.innerHTML += new Date().toLocaleTimeString() + ': ' + message + '<br>';
+                debugEl.innerHTML += `${timestamp}: ${message}<br>`;
                 debugEl.scrollTop = debugEl.scrollHeight;
             }
         }
@@ -372,8 +412,38 @@
             showResponse('Results cleared', 'success');
         }
 
+        function connectWhatsApp() {
+            log('Requesting WhatsApp connection...');
+            connectBtn.disabled = true;
+            connectBtn.textContent = 'Connecting...';
+            
+            // Show loading spinner
+            qrLoading.style.display = 'block';
+            qrSection.style.display = 'none';
+            mainSection.style.display = 'none';
+            
+            socket.emit('connect-whatsapp');
+            
+            // Reset button after timeout
+            setTimeout(() => {
+                connectBtn.disabled = false;
+                connectBtn.textContent = 'Connect WhatsApp';
+            }, 10000);
+        }
+
+        function refreshQR() {
+            log('Requesting fresh QR code...');
+            connectWhatsApp();
+        }
+
         socket.on('connect', () => {
             log('Connected to server');
+            showResponse('Connected to server', 'success');
+        });
+
+        socket.on('disconnect', () => {
+            log('Disconnected from server');
+            showResponse('Disconnected from server', 'error');
         });
 
         socket.on('connection-status', (status) => {
@@ -383,12 +453,31 @@
 
         socket.on('qr-code', (qrData) => {
             if (qrData) {
-                log('QR code received');
+                log('QR code received, length: ' + qrData.length);
                 qrImage.src = qrData;
-                qrSection.style.display = 'block';
-                mainSection.style.display = 'none';
+                qrImage.onload = () => {
+                    qrLoading.style.display = 'none';
+                    qrSection.style.display = 'block';
+                    refreshQrBtn.style.display = 'inline-block';
+                    log('QR code displayed successfully');
+                };
+                qrImage.onerror = () => {
+                    log('Error loading QR code image');
+                    qrLoading.style.display = 'none';
+                    showResponse('Error loading QR code', 'error');
+                };
+                
+                // Set QR expiration timer
+                if (qrTimeout) clearTimeout(qrTimeout);
+                qrTimeout = setTimeout(() => {
+                    log('QR code expired');
+                    showResponse('QR code expired. Click "Refresh QR" for a new one.', 'error');
+                }, 60000); // 60 seconds
             } else {
                 qrSection.style.display = 'none';
+                qrLoading.style.display = 'none';
+                refreshQrBtn.style.display = 'none';
+                if (qrTimeout) clearTimeout(qrTimeout);
             }
         });
 
@@ -401,8 +490,16 @@
                     statusEl.className += ' connected';
                     statusEl.textContent = 'Status: ✅ Connected to WhatsApp';
                     qrSection.style.display = 'none';
+                    qrLoading.style.display = 'none';
                     mainSection.style.display = 'block';
                     connectBtn.style.display = 'none';
+                    refreshQrBtn.style.display = 'none';
+                    if (qrTimeout) clearTimeout(qrTimeout);
+                    break;
+                case 'connecting':
+                    statusEl.className += ' connecting';
+                    statusEl.textContent = 'Status: 🔗 Connecting to WhatsApp...';
+                    mainSection.style.display = 'none';
                     break;
                 case 'qr-ready':
                     statusEl.className += ' qr-ready';
@@ -413,29 +510,24 @@
                     statusEl.className += ' disconnected';
                     statusEl.textContent = 'Status: ❌ Disconnected';
                     qrSection.style.display = 'none';
+                    qrLoading.style.display = 'none';
                     mainSection.style.display = 'none';
+                    refreshQrBtn.style.display = 'none';
+                    if (qrTimeout) clearTimeout(qrTimeout);
                     break;
                 case 'error':
                     statusEl.className += ' error';
                     statusEl.textContent = 'Status: ❌ Connection Error';
                     qrSection.style.display = 'none';
+                    qrLoading.style.display = 'none';
                     mainSection.style.display = 'none';
+                    refreshQrBtn.style.display = 'none';
+                    if (qrTimeout) clearTimeout(qrTimeout);
                     break;
                 default:
                     statusEl.className += ' disconnected';
                     statusEl.textContent = 'Status: ⏳ ' + status;
             }
-        }
-
-        function connectWhatsApp() {
-            log('Requesting WhatsApp connection...');
-            socket.emit('connect-whatsapp');
-            connectBtn.disabled = true;
-            connectBtn.textContent = 'Connecting...';
-            setTimeout(() => {
-                connectBtn.disabled = false;
-                connectBtn.textContent = 'Connect WhatsApp';
-            }, 5000);
         }
 
         // Single message form
@@ -557,7 +649,8 @@
             fetch('/api/status')
                 .then(res => res.json())
                 .then(data => {
-                    if (data.status !== statusEl.textContent.split(': ')[1]) {
+                    const currentStatus = statusEl.textContent.split(': ')[1];
+                    if (data.status !== currentStatus) {
                         updateStatus(data.status);
                     }
                 })

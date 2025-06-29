@@ -5,7 +5,6 @@ const fs = require('fs');
 const path = require('path');
 const QRCode = require('qrcode');
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom');
 const pino = require('pino');
 const multer = require('multer');
 const cors = require('cors');
@@ -27,7 +26,24 @@ const io = socketIo(server, {
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-app.use(express.static('public'));
+
+// Serve static files from public directory with proper MIME types
+app.use('/public', express.static(path.join(__dirname, 'public'), {
+    setHeaders: (res, path) => {
+        if (path.endsWith('.css')) {
+            res.setHeader('Content-Type', 'text/css');
+        } else if (path.endsWith('.js')) {
+            res.setHeader('Content-Type', 'application/javascript');
+        }
+    }
+}));
+
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Serve main HTML file
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
 
 // Create necessary directories
 const createDirectories = () => {
@@ -95,7 +111,9 @@ const saveData = (file, data) => {
 };
 
 // Logger
-const logger = pino({ level: 'info' });// WhatsApp Connection Functions
+const logger = pino({ level: 'info' });
+
+// WhatsApp Connection Functions
 const connectToWhatsApp = async () => {
     try {
         const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -240,7 +258,9 @@ const storeMessage = (messageData) => {
     } catch (error) {
         console.error('Error storing message:', error);
     }
-};// API Routes
+};
+
+// API Routes
 
 // Status and QR code endpoints
 app.get('/api/status', (req, res) => {
@@ -310,172 +330,6 @@ app.post('/api/send-message', async (req, res) => {
     }
 });
 
-app.post('/api/send-bulk', async (req, res) => {
-    try {
-        if (!sock || !isConnected) {
-            return res.status(400).json({ error: 'WhatsApp not connected' });
-        }
-
-        const { recipients, message, delay = 1000 } = req.body;
-        
-        if (!recipients || !Array.isArray(recipients) || !message) {
-            return res.status(400).json({ error: 'Missing required fields' });
-        }
-
-        const results = [];
-        
-        for (let i = 0; i < recipients.length; i++) {
-            try {
-                const recipient = recipients[i];
-                const result = await sock.sendMessage(recipient, { text: message });
-                
-                results.push({
-                    recipient,
-                    success: true,
-                    messageId: result.key.id
-                });
-
-                // Store sent message
-                const messageData = {
-                    id: result.key.id,
-                    to: recipient,
-                    message: message,
-                    timestamp: Date.now(),
-                    type: 'sent',
-                    status: 'sent'
-                };
-                
-                storeMessage(messageData);
-                io.emit('message-sent', messageData);
-                
-                // Delay between messages
-                if (i < recipients.length - 1) {
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                }
-                
-            } catch (error) {
-                console.error(`Error sending to ${recipients[i]}:`, error);
-                results.push({
-                    recipient: recipients[i],
-                    success: false,
-                    error: error.message
-                });
-            }
-        }
-
-        res.json({ results });
-    } catch (error) {
-        console.error('Error sending bulk messages:', error);
-        res.status(500).json({ error: 'Failed to send bulk messages' });
-    }
-});
-
-app.get('/api/messages/:chatId', (req, res) => {
-    try {
-        const { chatId } = req.params;
-        const allMessages = loadData(DATA_FILES.messages);
-        const chatMessages = allMessages.filter(m => m.from === chatId || m.to === chatId);
-        
-        // Sort by timestamp
-        chatMessages.sort((a, b) => a.timestamp - b.timestamp);
-        
-        res.json(chatMessages);
-    } catch (error) {
-        console.error('Error loading messages:', error);
-        res.status(500).json({ error: 'Failed to load messages' });
-    }
-});// File upload endpoints
-app.post('/api/upload', upload.single('file'), async (req, res) => {
-    try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'No file uploaded' });
-        }
-
-        const fileInfo = {
-            filename: req.file.filename,
-            originalName: req.file.originalname,
-            mimetype: req.file.mimetype,
-            size: req.file.size,
-            path: req.file.path
-        };
-
-        res.json(fileInfo);
-    } catch (error) {
-        console.error('Error uploading file:', error);
-        res.status(500).json({ error: 'Failed to upload file' });
-    }
-});
-
-app.post('/api/send-media', async (req, res) => {
-    try {
-        if (!sock || !isConnected) {
-            return res.status(400).json({ error: 'WhatsApp not connected' });
-        }
-
-        const { to, filename, caption } = req.body;
-        
-        if (!to || !filename) {
-            return res.status(400).json({ error: 'Missing required fields' });
-        }
-
-        const filePath = path.join('./uploads', filename);
-        
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ error: 'File not found' });
-        }
-
-        const mimeType = mime.lookup(filePath) || 'application/octet-stream';
-        const fileBuffer = fs.readFileSync(filePath);
-
-        let result;
-        
-        if (mimeType.startsWith('image/')) {
-            result = await sock.sendMessage(to, {
-                image: fileBuffer,
-                caption: caption || '',
-                mimetype: mimeType
-            });
-        } else if (mimeType.startsWith('video/')) {
-            result = await sock.sendMessage(to, {
-                video: fileBuffer,
-                caption: caption || '',
-                mimetype: mimeType
-            });
-        } else if (mimeType.startsWith('audio/')) {
-            result = await sock.sendMessage(to, {
-                audio: fileBuffer,
-                mimetype: mimeType
-            });
-        } else {
-            result = await sock.sendMessage(to, {
-                document: fileBuffer,
-                fileName: path.basename(filePath),
-                mimetype: mimeType,
-                caption: caption || ''
-            });
-        }
-
-        // Store sent message
-        const messageData = {
-            id: result.key.id,
-            to: to,
-            message: caption || `File: ${path.basename(filePath)}`,
-            timestamp: Date.now(),
-            type: 'sent',
-            mediaType: mimeType,
-            filename: filename
-        };
-        
-        storeMessage(messageData);
-        io.emit('message-sent', messageData);
-
-        res.json({ success: true, messageId: result.key.id });
-    } catch (error) {
-        console.error('Error sending media:', error);
-        res.status(500).json({ error: 'Failed to send media' });
-    }
-});
-
 // Template management endpoints
 app.get('/api/templates', (req, res) => {
     try {
@@ -514,85 +368,169 @@ app.post('/api/templates', (req, res) => {
     }
 });
 
-app.put('/api/templates/:id', (req, res) => {
+// Bulk messaging endpoint for personalization
+app.post('/api/send-bulk-personalized', async (req, res) => {
     try {
-        const { id } = req.params;
-        const { name, content, variables } = req.body;
-        
-        const templates = loadData(DATA_FILES.templates);
-        const templateIndex = templates.findIndex(t => t.id === id);
-        
-        if (templateIndex === -1) {
-            return res.status(404).json({ error: 'Template not found' });
+        if (!sock || !isConnected) {
+            return res.status(400).json({ error: 'WhatsApp not connected' });
         }
 
-        templates[templateIndex] = {
-            ...templates[templateIndex],
-            name,
-            content,
-            variables,
-            updatedAt: new Date().toISOString()
+        const { recipients, messageTemplate, delay = 3000 } = req.body;
+        
+        if (!recipients || !Array.isArray(recipients) || !messageTemplate) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        const results = {
+            total: recipients.length,
+            success: 0,
+            failed: 0,
+            errors: []
         };
 
-        saveData(DATA_FILES.templates, templates);
-        res.json(templates[templateIndex]);
+        // Send messages with delay
+        for (let i = 0; i < recipients.length; i++) {
+            const recipient = recipients[i];
+            
+            try {
+                // Personalize message for this recipient
+                let personalizedMessage = messageTemplate;
+                
+                // Replace tokens with recipient data
+                if (recipient.name) {
+                    personalizedMessage = personalizedMessage.replace(/\{\{name\}\}/g, recipient.name);
+                }
+                if (recipient.phone) {
+                    personalizedMessage = personalizedMessage.replace(/\{\{phone\}\}/g, recipient.phone);
+                }
+                if (recipient.email) {
+                    personalizedMessage = personalizedMessage.replace(/\{\{email\}\}/g, recipient.email);
+                }
+                if (recipient.company) {
+                    personalizedMessage = personalizedMessage.replace(/\{\{company\}\}/g, recipient.company);
+                }
+                if (recipient.position) {
+                    personalizedMessage = personalizedMessage.replace(/\{\{position\}\}/g, recipient.position);
+                }
+                if (recipient.customField1) {
+                    personalizedMessage = personalizedMessage.replace(/\{\{customField1\}\}/g, recipient.customField1);
+                }
+                if (recipient.customField2) {
+                    personalizedMessage = personalizedMessage.replace(/\{\{customField2\}\}/g, recipient.customField2);
+                }
+
+                // Send the personalized message
+                const result = await sock.sendMessage(recipient.jid, { text: personalizedMessage });
+                
+                // Store sent message
+                const messageData = {
+                    id: result.key.id,
+                    to: recipient.jid,
+                    message: personalizedMessage,
+                    timestamp: Date.now(),
+                    type: 'sent',
+                    status: 'sent',
+                    bulk: true
+                };
+                
+                storeMessage(messageData);
+                io.emit('message-sent', messageData);
+                
+                results.success++;
+                
+                // Add delay between messages (except for the last one)
+                if (i < recipients.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+                
+            } catch (error) {
+                console.error(`Error sending to ${recipient.jid}:`, error);
+                results.failed++;
+                results.errors.push({
+                    recipient: recipient.jid,
+                    error: error.message
+                });
+            }
+        }
+
+        res.json({
+            success: true,
+            results: results
+        });
+        
     } catch (error) {
-        console.error('Error updating template:', error);
-        res.status(500).json({ error: 'Failed to update template' });
+        console.error('Error sending bulk messages:', error);
+        res.status(500).json({ error: 'Failed to send bulk messages' });
     }
 });
 
-app.delete('/api/templates/:id', (req, res) => {
+// Token suggestion endpoint
+app.get('/api/personalization/tokens', (req, res) => {
     try {
-        const { id } = req.params;
-        const templates = loadData(DATA_FILES.templates);
-        const filteredTemplates = templates.filter(t => t.id !== id);
+        const availableTokens = [
+            { token: '{{name}}', description: 'Contact name' },
+            { token: '{{phone}}', description: 'Contact phone number' },
+            { token: '{{email}}', description: 'Contact email address' },
+            { token: '{{company}}', description: 'Contact company' },
+            { token: '{{position}}', description: 'Contact position' },
+            { token: '{{customField1}}', description: 'Custom field 1' },
+            { token: '{{customField2}}', description: 'Custom field 2' }
+        ];
         
-        if (filteredTemplates.length === templates.length) {
-            return res.status(404).json({ error: 'Template not found' });
-        }
+        res.json(availableTokens);
+    } catch (error) {
+        console.error('Error getting tokens:', error);
+        res.status(500).json({ error: 'Failed to get tokens' });
+    }
+});
 
-        saveData(DATA_FILES.templates, filteredTemplates);
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Error deleting template:', error);
-        res.status(500).json({ error: 'Failed to delete template' });
-    }
-});// Clean up old files periodically
-cron.schedule('0 2 * * *', () => {
-    console.log('Running cleanup task...');
-    
-    // Clean up old uploaded files (older than 7 days)
-    const uploadsDir = './uploads';
-    if (fs.existsSync(uploadsDir)) {
-        const files = fs.readdirSync(uploadsDir);
-        const now = Date.now();
-        const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
-        
-        files.forEach(file => {
-            const filePath = path.join(uploadsDir, file);
-            const stats = fs.statSync(filePath);
-            
-            if (stats.mtime.getTime() < sevenDaysAgo) {
-                fs.unlinkSync(filePath);
-                console.log(`Deleted old file: ${file}`);
-            }
-        });
-    }
-    
-    // Clean up old messages (keep only last 30 days)
+// Template variable detection endpoint
+app.post('/api/personalization/detect-variables', (req, res) => {
     try {
-        const messages = loadData(DATA_FILES.messages);
-        const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
-        const filteredMessages = messages.filter(msg => msg.timestamp > thirtyDaysAgo);
+        const { content } = req.body;
         
-        if (filteredMessages.length < messages.length) {
-            saveData(DATA_FILES.messages, filteredMessages);
-            console.log(`Cleaned up ${messages.length - filteredMessages.length} old messages`);
+        if (!content) {
+            return res.status(400).json({ error: 'Missing content' });
         }
+        
+        // Extract variables from template content
+        const variableRegex = /\{\{([^}]+)\}\}/g;
+        const variables = [];
+        let match;
+        
+        while ((match = variableRegex.exec(content)) !== null) {
+            const variable = match[1].trim();
+            if (!variables.includes(variable)) {
+                variables.push(variable);
+            }
+        }
+        
+        res.json({ variables });
     } catch (error) {
-        console.error('Error cleaning up messages:', error);
+        console.error('Error detecting variables:', error);
+        res.status(500).json({ error: 'Failed to detect variables' });
     }
+});
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+    console.log('Client connected:', socket.id);
+    
+    // Send current status
+    socket.emit('connection-status', { connected: isConnected });
+    
+    if (qrCodeData) {
+        socket.emit('qr-code', qrCodeData);
+    }
+    
+    if (isConnected) {
+        socket.emit('contacts-loaded', Array.from(contacts.values()));
+        socket.emit('groups-loaded', Array.from(groups.values()));
+    }
+    
+    socket.on('disconnect', () => {
+        console.log('Client disconnected:', socket.id);
+    });
 });
 
 // Start server
@@ -600,21 +538,11 @@ const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, async () => {
     console.log(`WhatsApp Web Client server running on port ${PORT}`);
-    console.log(`Access the application at: http://localhost:${PORT}`);
+    console.log(`Static files served from: ${path.join(__dirname, 'public')}`);
     
     // Initialize WhatsApp connection
     console.log('Initializing WhatsApp connection...');
     await connectToWhatsApp();
-});
-
-// Error handling
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
-    cleanup();
 });
 
 module.exports = { app, server, io };
